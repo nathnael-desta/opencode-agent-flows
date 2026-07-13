@@ -24,5 +24,13 @@
   "engines": {
     "bun": ">=1.0.0"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nathnael-desta/opencode-agent-flows.git"
+  },
+  "homepage": "https://github.com/nathnael-desta/opencode-agent-flows#readme",
+  "bugs": {
+    "url": "https://github.com/nathnael-desta/opencode-agent-flows/issues"
+  }
 }

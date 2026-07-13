@@ -4,24 +4,31 @@ Version-controlled, shareable agentic flows for OpenCode. Provider adapters
 stay in their own repositories; this project only decides which agent uses
 which provider, model, and reasoning effort.
 
-## Best Of Both Worlds
+## OpenAI + Command Code Router
 
 The included flow combines:
 
 - A ChatGPT Plus/Pro subscription for GPT models through OpenCode's native
   `openai` provider.
-- A $1 Command Code Go subscription for permanently discounted open-source
+- A $1 Command Code Go subscription with $10 in monthly credits for open-source
   models through the separate Command Code provider fork.
 
 | Role | Provider/model | Effort |
 |---|---|---|
 | Orchestrator | `openai/gpt-5.6-sol` | low |
+| Repetitive bulk work | `commandcode/mimo-v2.5` | default |
 | Routine and fast path | `commandcode/deepseek-v4-pro` | high |
 | Deep work | `openai/gpt-5.6-sol` | low |
 | Approved escalation | `openai/gpt-5.6-sol` | medium or high |
 
-DeepSeek V4 Pro replaces Flash in the routine path because its 75% Command
-Code discount is permanent. Temporary promotions are not used for defaults.
+DeepSeek V4 Pro is the routine default because this flow favors its coding
+quality. Flash is cheaper and can be substituted when throughput and cost are
+more important. Command Code's current V4 Pro rates match DeepSeek's direct API
+rates; its advertised 75% reduction is not an additional stacked discount.
+
+MiMo V2.5 handles repetitive, low-risk, token-heavy transformations. It has the
+same current per-token rates as DeepSeek V4 Flash, preserving V4 Pro for work
+that benefits from stronger coding judgment.
 
 ## Install
 
@@ -36,7 +43,7 @@ Add the local plugin to `~/.config/opencode/opencode.json`:
   "plugin": [
     [
       "file:///absolute/path/to/opencode-agent-flows/plugin.ts",
-      { "flow": "best-of-both-worlds", "setDefault": true }
+      { "flow": "openai-commandcode-router", "setDefault": true }
     ]
   ]
 }
@@ -66,7 +73,10 @@ OpenCode loads `plugin.ts` at startup and calls its `config` hook. The plugin:
 The orchestrator is a normal primary OpenCode agent. Its prompt tells it when
 to delegate through OpenCode's task tool. A delegated subagent performs its own
 model call; Sol low chooses the worker but does not simulate the worker's
-reasoning.
+reasoning. After each delegation, the orchestrator inspects the result and
+continues assigning units of work until verification passes or user input is
+required. This is OpenCode's normal in-session tool loop, not an unbounded
+external process that restarts failed sessions forever.
 
 The medium/high approval boundary is prompt-enforced, not a hard billing
 firewall. Remove those agents or tighten their permissions if you require a
@@ -74,7 +84,7 @@ strict technical boundary.
 
 ## Add A Flow
 
-1. Copy `src/flows/best-of-both-worlds.ts` to a new file.
+1. Copy `src/flows/openai-commandcode-router.ts` to a new file.
 2. Give every agent a unique name, model, mode, and concise responsibility.
 3. Export the flow from `src/flows/index.ts` under a new key.
 4. Add tests asserting provider boundaries and escalation behavior.

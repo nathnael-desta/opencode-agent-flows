@@ -38,7 +38,7 @@ through Command Code; it does not mean this flow routes GPT usage there.
 
 ## Manual Changes
 
-Edit `src/flows/best-of-both-worlds.ts`:
+Edit `src/flows/openai-commandcode-router.ts`:
 
 - Change `model` to move an agent to another provider.
 - Change `variant` to adjust reasoning effort.

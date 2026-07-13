@@ -5,7 +5,7 @@ export default async function agentFlowsPlugin(
   _input: unknown,
   options: PluginOptions = {},
 ) {
-  const flowName = options.flow ?? "best-of-both-worlds"
+  const flowName = options.flow ?? "openai-commandcode-router"
   const flow = flows[flowName]
   if (!flow) {
     throw new Error(`Unknown OpenCode agent flow: ${flowName}`)

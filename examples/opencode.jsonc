@@ -5,7 +5,7 @@
     [
       "file:///absolute/path/to/opencode-agent-flows/plugin.ts",
       {
-        "flow": "best-of-both-worlds",
+        "flow": "openai-commandcode-router",
         "setDefault": true
       }
     ]
