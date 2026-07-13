@@ -1,0 +1,20 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugin": [
+    "file:///absolute/path/to/opencode-commandcode-provider/plugin.ts",
+    [
+      "file:///absolute/path/to/opencode-agent-flows/plugin.ts",
+      {
+        "flow": "best-of-both-worlds",
+        "setDefault": true
+      }
+    ]
+  ],
+  "provider": {
+    "commandcode": {
+      "npm": "file:///absolute/path/to/opencode-commandcode-provider",
+      "name": "Command Code",
+      "env": ["COMMANDCODE_API_KEY"]
+    }
+  }
+}

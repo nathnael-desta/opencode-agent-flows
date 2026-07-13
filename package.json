@@ -1,0 +1,28 @@
+{
+  "name": "opencode-agent-flows",
+  "version": "0.1.0",
+  "description": "Shareable, provider-aware agentic flows for OpenCode",
+  "type": "module",
+  "main": "plugin.ts",
+  "exports": {
+    ".": "./plugin.ts"
+  },
+  "files": [
+    "plugin.ts",
+    "src/",
+    "docs/",
+    "examples/"
+  ],
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^6.0.3"
+  },
+  "engines": {
+    "bun": ">=1.0.0"
+  },
+  "license": "MIT"
+}
