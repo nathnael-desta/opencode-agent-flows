@@ -1,18 +1,30 @@
 {
   "$schema": "https://opencode.ai/config.json",
   "plugin": [
-    "file:///absolute/path/to/opencode-commandcode-provider/plugin.ts",
+    "opencode-commandcode-provider@0.1.0",
     [
-      "file:///absolute/path/to/opencode-agent-flows/plugin.ts",
+      "opencode-agent-flows@0.1.0",
       {
         "flow": "openai-commandcode-router",
-        "setDefault": true
+        "setDefault": true,
+        "telemetry": {
+          "enabled": true,
+          "runSummaryToast": true,
+          "apiEquivalentPricing": {
+            "openai/gpt-5.6-sol": { "input": 5, "output": 30, "cacheRead": 0.5, "cacheWrite": 6.25 },
+            "openai/gpt-5.6-terra": { "input": 2.5, "output": 15, "cacheRead": 0.25, "cacheWrite": 3.125 }
+          }
+        },
+        "quota": {
+          "codex": true,
+          "commandCodeMonthlyCreditsUsd": 40
+        }
       }
     ]
   ],
   "provider": {
     "commandcode": {
-      "npm": "file:///absolute/path/to/opencode-commandcode-provider",
+      "npm": "opencode-commandcode-provider@0.1.0",
       "name": "Command Code",
       "env": ["COMMANDCODE_API_KEY"]
     }
