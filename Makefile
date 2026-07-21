@@ -6,12 +6,13 @@ SHELL := bash
 VERSION ?= patch
 BRANCH ?= main
 
-.PHONY: help check package release
+.PHONY: help check package publish release
 
 help:
 >printf '%s\n' \
   'make check                 Run documentation, tests, type checks, and package validation.' \
   'make package               Preview the files that npm would publish.' \
+  'make publish               Publish the current version, prompting for npm OTP.' \
   'make release VERSION=patch Release committed work to npm and GitHub.'
 
 check:
@@ -20,6 +21,14 @@ check:
 
 package:
 >npm pack --dry-run
+
+publish:
+>if [[ -n "$(OTP)" ]]; then
+>  npm publish --access public --otp="$(OTP)"
+>else
+>  read -r -p 'npm OTP: ' otp
+>  npm publish --access public --otp="$$otp"
+>fi
 
 release:
 >test "$$(git branch --show-current)" = "$(BRANCH)" || { printf 'Release must run from %s.\n' "$(BRANCH)" >&2; exit 1; }
@@ -38,4 +47,4 @@ release:
 >git tag "v$$version"
 >git push origin HEAD:"$(BRANCH)"
 >git push origin "v$$version"
->npm publish --access public
+>$(MAKE) publish
