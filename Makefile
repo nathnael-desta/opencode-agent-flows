@@ -12,7 +12,7 @@ help:
 >printf '%s\n' \
   'make check                 Run documentation, tests, type checks, and package validation.' \
   'make package               Preview the files that npm would publish.' \
-  'make publish               Publish the current version, prompting for npm OTP.' \
+  'make publish               Publish the current version using npm authentication.' \
   'make release VERSION=patch Release committed work to npm and GitHub.'
 
 check:
@@ -23,12 +23,7 @@ package:
 >npm pack --dry-run
 
 publish:
->if [[ -n "$(OTP)" ]]; then
->  npm publish --access public --otp="$(OTP)"
->else
->  read -r -p 'npm OTP: ' otp
->  npm publish --access public --otp="$$otp"
->fi
+>npm publish --access public
 
 release:
 >test "$$(git branch --show-current)" = "$(BRANCH)" || { printf 'Release must run from %s.\n' "$(BRANCH)" >&2; exit 1; }
