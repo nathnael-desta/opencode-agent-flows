@@ -113,6 +113,10 @@ areas such as authentication, billing, infrastructure, and migrations.
 
 Routine delegations require a labelled work packet: Objective, Scope,
 Constraints, Acceptance, Verification, Escalate When, and Return. The plugin
+caps that packet at 3,000 characters and directs the orchestrator to describe
+observable outcomes and subsystem boundaries rather than inspect files or
+produce a detailed implementation plan. Repository exploration, file selection,
+and implementation design belong to the economical worker. The plugin
 appends a worker contract that permits correcting inaccurate file assumptions
 from repository evidence, but prohibits silently broadening the requested
 behavior. Workers must return a structured report with changed files,

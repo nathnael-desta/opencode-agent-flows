@@ -44,6 +44,8 @@ describe("agent flows plugin", () => {
     expect(config.agent.orchestrator.prompt).toContain("no independent cross-family reviewer")
     expect(config.agent.orchestrator.prompt).toContain("Agent or general-purpose subagents")
     expect(config.agent.orchestrator.prompt).toContain("concrete verification evidence")
+    expect(config.agent.orchestrator.prompt).toContain("surface-level and cheap")
+    expect(config.agent.orchestrator.prompt).toContain("worker owns repository exploration")
     expect(config.agent.orchestrator.permission).toBeDefined()
     expect(config.agent.routine.permission.task).toBe("deny")
   })
@@ -117,6 +119,7 @@ describe("agent flows plugin", () => {
     })
     await hooks["chat.message"]?.({ sessionID: "root", agent: "orchestrator", messageID: "run" }, { message: { id: "run", role: "user", time: { created: Date.now() } } })
     await expect(hooks["tool.execute.before"]?.({ tool: "task", sessionID: "root", callID: "invalid" }, { args: { subagent_type: "routine", description: "Fix it" } })).rejects.toThrow("routine requires a work packet")
+    await expect(hooks["tool.execute.before"]?.({ tool: "task", sessionID: "root", callID: "oversized" }, { args: { subagent_type: "routine", description: `${workPacket}\n${"x".repeat(3_000)}` } })).rejects.toThrow("surface-level planning budget")
 
     const args = { subagent_type: "routine", description: workPacket }
     await hooks["tool.execute.before"]?.({ tool: "task", sessionID: "root", callID: "valid" }, { args })
