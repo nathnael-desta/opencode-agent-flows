@@ -163,6 +163,20 @@ sources, and a baseline agent; runtime reports preserve the actual provider and
 model. Capacity remains an estimate because subscription limits are not
 token-metered.
 
+## Model Overrides
+
+`flow_models` lists the effective model mapping. To change it from an OpenCode
+conversation, ask the orchestrator to change an agent or invoke the tool with
+an agent and `provider/model` value, such as
+`commandcode/laguna-s-2.1-free`. The override is saved at
+`~/.local/state/opencode-agent-flows/model-overrides.json`; restart OpenCode to
+apply it. Omitting a variant clears the default variant for the new model. Use
+`reset: true` with an agent to return to the model shipped by the flow.
+
+An override can select only a model already available through an OpenCode
+provider. Adding a new provider or model catalog still belongs in
+`opencode.json`.
+
 Useful configuration:
 
 ```json

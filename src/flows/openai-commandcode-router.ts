@@ -15,6 +15,7 @@ export const openaiCommandCodeRouter = {
       permission: { task: { "*": "deny", bulk: "allow", routine: "allow", reviewer: "allow", deep: "allow", "extreme-*": "allow", "flow-*": "allow" } },
       prompt: [
         "Classify each request before acting.",
+        "When the user asks to inspect, change, or reset flow-agent models, use flow_models. Explain that the persistent model change takes effect after restarting OpenCode.",
         "Delegate repetitive, low-risk, high-volume transformations requiring little judgment to bulk.",
         "Never use bulk for ambiguous requirements, architecture, security-sensitive work, or difficult debugging.",
         "Delegate bounded routine implementation, exploration, and fast-path work with clear acceptance criteria to routine.",

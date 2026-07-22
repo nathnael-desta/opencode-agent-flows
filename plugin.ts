@@ -14,6 +14,7 @@ import { flowReportMarkdown, globalReportMarkdown } from "./src/telemetry/markdo
 interface RunState { id: string; rootSessionID: string; startedAt: number }
 interface SessionInfo { id: string; parentID?: string }
 interface RawMessage { id?: string; role: "user" | "assistant"; agent?: string; providerID?: string; modelID?: string; variant?: string; cost?: number; tokens?: Record<string, number>; time?: { created?: number; completed?: number } }
+type ModelOverrides = Record<string, { model: string; variant?: string }>
 
 const DEFAULT_PROTECTED_PATHS = [".env", "auth", "billing", "infrastructure", "migrations"]
 const WORK_PACKET_HEADINGS = ["Objective", "Scope", "Constraints", "Acceptance", "Verification", "Escalate When", "Return"]
@@ -119,6 +120,35 @@ async function saveDeveloperMode(path: string, state: DeveloperModeSnapshot): Pr
   await rename(temporary, path)
 }
 
+async function loadModelOverrides(path: string): Promise<ModelOverrides> {
+  try {
+    const value = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>
+    return Object.fromEntries(Object.entries(value).flatMap(([agent, override]) => {
+      if (typeof override !== "object" || override === null || typeof (override as { model?: unknown }).model !== "string") return []
+      const { model, variant } = override as { model: string; variant?: unknown }
+      return [[agent, { model, ...(typeof variant === "string" ? { variant } : {}) }]]
+    }))
+  } catch {
+    return {}
+  }
+}
+
+async function saveModelOverrides(path: string, state: ModelOverrides): Promise<void> {
+  await mkdir(dirname(path), { recursive: true })
+  const temporary = `${path}.${process.pid}.${crypto.randomUUID()}.tmp`
+  await writeFile(temporary, `${JSON.stringify(state, null, 2)}\n`, "utf8")
+  await rename(temporary, path)
+}
+
+function applyModelOverrides(agents: Record<string, AgentDefinition>, overrides: ModelOverrides): Record<string, AgentDefinition> {
+  return Object.fromEntries(Object.entries(agents).map(([name, definition]) => {
+    const override = overrides[name]
+    if (!override) return [name, definition]
+    const { variant: _variant, ...withoutVariant } = definition
+    return [name, { ...withoutVariant, model: override.model, ...(override.variant ? { variant: override.variant } : {}) }]
+  }))
+}
+
 function evaluatorAgent(baseline: AgentDefinition, instruction: string, source: "audit-review" | "shadow-plan" | "shadow-implementation"): AgentDefinition {
   return {
     description: instruction,
@@ -137,16 +167,19 @@ export default async function agentFlowsPlugin(input: any, options: PluginOption
   const reportDirectory = expandPath(telemetryOptions.reportDir ?? options.usageReportDir ?? defaultTelemetryDirectory())
   const store = new TelemetryStore(reportDirectory, { dashboard: telemetryOptions.dashboard, retentionDays: telemetryOptions.retentionDays })
   const developerPath = join(reportDirectory, "developer-mode.json")
+  const modelOverridesPath = join(reportDirectory, "model-overrides.json")
   let developerMode = await loadDeveloperMode(developerPath, developerDefaults(options))
+  let modelOverrides = await loadModelOverrides(modelOverridesPath)
+  let configuredAgents = applyModelOverrides(flow.agents, modelOverrides)
   const metadata: Record<string, AgentMetadata> = { ...flow.agentMetadata }
-  const baseline = flow.agents[flow.baselineAgent]
+  const baseline = configuredAgents[flow.baselineAgent]
   if (baseline) {
     const billingSource = flow.agentMetadata[flow.baselineAgent]?.billingSource ?? "unknown"
     metadata["flow-audit-reviewer"] = { role: "evaluator", billingSource, risk: "low" }
     metadata["flow-shadow-planner"] = { role: "evaluator", billingSource, risk: "low" }
     metadata["flow-shadow-implementer"] = { role: "evaluator", billingSource, risk: "low" }
   }
-  const runtimeFlow = { ...flow, agentMetadata: metadata }
+  let runtimeFlow = { ...flow, agents: configuredAgents, agentMetadata: metadata }
   const activeRuns = new Map<string, RunState>()
   const sessionAgents = new Map<string, string>()
   const tasks = new Map<string, TaskTrace>()
@@ -228,6 +261,38 @@ export default async function agentFlowsPlugin(input: any, options: PluginOption
     },
   })
 
+  function modelSummary(): string {
+    return Object.entries(configuredAgents).map(([name, agent]) => {
+      const shipped = flow.agents[name]
+      const override = modelOverrides[name]
+      const suffix = override ? ` override; default ${shipped.model}${shipped.variant ? ` (${shipped.variant})` : ""}` : " default"
+      return `- ${name}: ${agent.model}${agent.variant ? ` (${agent.variant})` : ""}${suffix}`
+    }).join("\n")
+  }
+
+  const modelsTool = tool({
+    description: "List persistent flow-agent model mappings, or set/reset one mapping. Changes apply after restarting OpenCode.",
+    args: { agent: tool.schema.string().optional(), model: tool.schema.string().optional(), variant: tool.schema.string().optional(), reset: tool.schema.boolean().optional() },
+    async execute(args) {
+      if (!args.agent) return `Flow models:\n${modelSummary()}\n\nUse flow_models with agent and model to save an override. Changes apply after restarting OpenCode.`
+      if (!flow.agents[args.agent]) throw new Error(`Unknown flow agent: ${args.agent}. Available agents: ${Object.keys(flow.agents).join(", ")}`)
+      if (args.reset) {
+        delete modelOverrides[args.agent]
+        configuredAgents = applyModelOverrides(flow.agents, modelOverrides)
+        runtimeFlow = { ...flow, agents: configuredAgents, agentMetadata: metadata }
+        await saveModelOverrides(modelOverridesPath, modelOverrides)
+        return `Reset ${args.agent} to ${configuredAgents[args.agent].model}${configuredAgents[args.agent].variant ? ` (${configuredAgents[args.agent].variant})` : ""}. Restart OpenCode to apply it.`
+      }
+      if (!args.model) throw new Error("model is required unless reset is true")
+      if (!/^[^/\s]+\/[^/\s]+$/.test(args.model)) throw new Error("model must use provider/model format, for example commandcode/laguna-s-2.1-free")
+      modelOverrides[args.agent] = { model: args.model, ...(args.variant ? { variant: args.variant } : {}) }
+      configuredAgents = applyModelOverrides(flow.agents, modelOverrides)
+      runtimeFlow = { ...flow, agents: configuredAgents, agentMetadata: metadata }
+      await saveModelOverrides(modelOverridesPath, modelOverrides)
+      return `Saved ${args.agent}: ${args.model}${args.variant ? ` (${args.variant})` : ""}. The variant is cleared when omitted. Restart OpenCode to apply this override.`
+    },
+  })
+
   const statusTool = tool({ description: "Show agent-flow telemetry for the latest run, current session, or all recorded runs.", args: { scope: tool.schema.enum(["run", "session", "global"]).default("run") }, async execute(args, context) { if (args.scope === "global") return globalReportMarkdown(await store.global()); const root = await resolveRoot(context.sessionID); if (!root) return "Could not resolve the current root session."; const report = args.scope === "run" ? await store.latestRunForSession(root.id) : await store.session(root.id); return report ? flowReportMarkdown(report) : `No completed ${args.scope} report is available yet.` } })
   const dashboardTool = tool({ description: "Return the cross-client HTML dashboard and report locations for agent-flow telemetry.", args: {}, async execute() { await store.rebuildGlobal(); return `Dashboard: file://${reportDirectory}/dashboard.html\nLatest run: ${reportDirectory}/latest-run.md\nGlobal report: ${reportDirectory}/global.md\nDeveloper controls: flow_developer_mode`; } })
   const feedbackTool = tool({ description: "Record explicit user feedback for the latest completed agent-flow run.", args: { rating: tool.schema.enum(["good", "mixed", "bad"]), note: tool.schema.string().max(2_000).optional() }, async execute(args, context) { const root = await resolveRoot(context.sessionID); if (!root) throw new Error("Could not resolve the current root session"); await store.appendFeedback(root.id, { id: crypto.randomUUID(), sessionID: root.id, source: "feedback", verdict: args.rating, note: args.note, observedAt: Date.now() }); return `Recorded ${args.rating} feedback for the latest completed run.` } })
@@ -236,7 +301,14 @@ export default async function agentFlowsPlugin(input: any, options: PluginOption
   const hooks: any = {
     config: async (config: OpenCodeConfig) => {
       config.agent ??= {}
-      for (const [name, definition] of Object.entries(flow.agents)) config.agent[name] ??= definition
+      for (const [name, definition] of Object.entries(configuredAgents)) {
+        if (modelOverrides[name] && config.agent[name]) {
+          const { variant: _variant, ...withoutVariant } = config.agent[name] as AgentDefinition
+          config.agent[name] = { ...withoutVariant, model: definition.model, ...(definition.variant ? { variant: definition.variant } : {}) }
+        } else {
+          config.agent[name] ??= definition
+        }
+      }
       if (baseline) {
         config.agent["flow-audit-reviewer"] ??= evaluatorAgent(baseline, "Blindly audit the completed diff and verification evidence.", "audit-review")
         config.agent["flow-shadow-planner"] ??= evaluatorAgent(baseline, "Create an independent read-only implementation plan.", "shadow-plan")
@@ -244,7 +316,7 @@ export default async function agentFlowsPlugin(input: any, options: PluginOption
       }
       if (options.setDefault !== false) config.default_agent ??= flow.defaultAgent
     },
-    tool: { flow_status: statusTool, flow_dashboard: dashboardTool, flow_feedback: feedbackTool, flow_approve_escalation: approvalTool, flow_developer_mode: developerTool },
+    tool: { flow_status: statusTool, flow_dashboard: dashboardTool, flow_feedback: feedbackTool, flow_approve_escalation: approvalTool, flow_developer_mode: developerTool, flow_models: modelsTool },
     "chat.message": async (chatInput: { sessionID: string; agent?: string; messageID?: string }, output: { message: RawMessage }) => { if (chatInput.agent) sessionAgents.set(chatInput.sessionID, chatInput.agent); const root = await resolveRoot(chatInput.sessionID); if (!root || root.id !== chatInput.sessionID || chatInput.agent !== flow.defaultAgent) return; activeRuns.set(root.id, { id: chatInput.messageID ?? output.message.id ?? crypto.randomUUID(), rootSessionID: root.id, startedAt: output.message.time?.created ?? Date.now() }) },
     "experimental.chat.system.transform": async (systemInput: { sessionID?: string }, output: { system: string[] }) => { if (!systemInput.sessionID) return; const root = await resolveRoot(systemInput.sessionID); if (root && root.id === systemInput.sessionID) output.system.push(...developerInstructions(root.id)) },
     "tool.execute.before": async (toolInput: { tool: string; sessionID: string; callID: string }, output: { args: Record<string, unknown> }) => {

@@ -87,6 +87,27 @@ describe("agent flows plugin", () => {
     expect(status).toContain("sample rate=1")
   })
 
+  test("persists model overrides for the next OpenCode startup", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "agent-flow-models-"))
+    temporaryDirectories.push(directory)
+    const hooks: any = await plugin({}, { telemetry: { reportDir: directory } })
+    expect(await hooks.tool.flow_models.execute({})).toContain("routine: commandcode/deepseek-v4-pro")
+    expect(await hooks.tool.flow_models.execute({ agent: "routine", model: "commandcode/laguna-s-2.1-free" })).toContain("Restart OpenCode")
+
+    const reloaded: any = await plugin({}, { telemetry: { reportDir: directory } })
+    const config: Record<string, any> = {}
+    await reloaded.config(config)
+    expect(config.agent.routine.model).toBe("commandcode/laguna-s-2.1-free")
+    expect(config.agent.routine.variant).toBeUndefined()
+
+    await reloaded.tool.flow_models.execute({ agent: "routine", reset: true })
+    const reset: any = await plugin({}, { telemetry: { reportDir: directory } })
+    const resetConfig: Record<string, any> = {}
+    await reset.config(resetConfig)
+    expect(resetConfig.agent.routine.model).toBe("commandcode/deepseek-v4-pro")
+    expect(resetConfig.agent.routine.variant).toBe("high")
+  })
+
   test("rejects unknown flows", async () => {
     await expect(plugin({}, { flow: "missing" })).rejects.toThrow("Unknown OpenCode agent flow")
   })
