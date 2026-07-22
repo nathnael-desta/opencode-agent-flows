@@ -20,7 +20,8 @@ export const openaiCommandCodeRouter = {
         "Delegate bounded routine implementation, exploration, and fast-path work with clear acceptance criteria to routine.",
         "Keep routine planning surface-level and cheap: do not inspect implementation files merely to prepare a packet, enumerate expected file edits, design the detailed solution, or predict the diff. The worker owns repository exploration, detailed planning, and implementation choices.",
         "Routine work packets must stay concise and label Objective, Scope, Constraints, Acceptance, Verification, Escalate When, and Return. Scope names the behavior or subsystem, not an exhaustive file list. Treat worker reports without a valid <flow-work-report> as incomplete.",
-        "Use deep only after routine exhausts its bounded repair attempts with concrete verification evidence, or immediately for architecture, ambiguous acceptance criteria, security, authorization, money, destructive data operations, concurrency, or complex migrations.",
+        "Architecture, security, authorization, money, destructive data operations, concurrency, and migrations still go to routine first. Give the worker the risk constraints and require it to stop rather than guess.",
+        "Use deep only when routine returns a concrete failed or blocked result that economical retries cannot responsibly resolve. Before every deep call, explain the evidence to the user and request one-use approval with flow_approve_escalation.",
         "Before using deep after a worker failure, pass the specific blocker, final diff, and verification evidence so it diagnoses the residue rather than repeats the worker's exploration.",
         "When a loaded skill asks for Agent or general-purpose subagents, translate that intent to the available task subagent whose role best matches the work.",
         "For code review, use a reviewer from a different model family than the agent that implemented the change; prefer reviewer, fall back to another configured different-family subagent, and disclose when no independent cross-family reviewer is available.",
@@ -82,7 +83,7 @@ export const openaiCommandCodeRouter = {
     bulk: { role: "bulk-worker", billingSource: "commandcode-credits", risk: "low" },
     routine: { role: "worker", billingSource: "commandcode-credits", risk: "standard" },
     reviewer: { role: "reviewer", billingSource: "commandcode-credits", risk: "low" },
-    deep: { role: "escalation", billingSource: "chatgpt-subscription", risk: "high" },
+    deep: { role: "escalation", billingSource: "chatgpt-subscription", risk: "high", requiresApproval: true },
     "extreme-medium": {
       role: "escalation",
       billingSource: "chatgpt-subscription",
@@ -99,14 +100,14 @@ export const openaiCommandCodeRouter = {
   routingRules: [
     "Send repetitive, low-risk, token-heavy transformations to bulk.",
     "Send bounded routine implementation, exploration, and fast-path work with clear acceptance criteria to routine.",
-    "Use deep only for high-risk work or evidence-backed residue after routine exhausts its bounded retries; provide the blocker, diff, and verification evidence.",
+    "Send high-risk work to routine first with explicit stop conditions; use deep only for evidence-backed residue after routine fails or blocks.",
     "Use reviewer selectively for missing or failed verification, high-risk changes, and configured samples.",
     "When a workflow explicitly requests code review, prefer reviewer and keep the reviewer in a different model family from the implementation worker where possible.",
   ],
   escalationRules: [
     "Do not escalate merely because a task is long or spans multiple files.",
-    "Escalate to deep after routine exhausts its bounded retries only when deterministic verification, requirements, or repository evidence identify a concrete blocker.",
-    "extreme-medium and extreme-high require an explicit approval token from the plugin.",
+    "Escalate to deep only after a failed or blocked routine attempt identifies a concrete blocker.",
+    "deep, extreme-medium, and extreme-high require an explicit approval token from the plugin.",
     "A worker may retry bounded verification failures before escalating.",
   ],
   verification: {

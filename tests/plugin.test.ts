@@ -19,6 +19,7 @@ bun test
 Requirements conflict.
 # Return:
 Changed files and evidence.`
+const markdownWorkPacket = workPacket.replaceAll(":\n", "\n")
 
 afterEach(async () => {
   await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })))
@@ -39,11 +40,12 @@ describe("agent flows plugin", () => {
     expect(config.agent.reviewer.model).toBe("commandcode/mimo-v2.5-pro")
     expect(config.agent.deep.model).toBe("openai/gpt-5.6-terra")
     expect(config.agent.deep.variant).toBe("high")
+    expect(config.agent.deep.description).toContain("Escalation-only")
     expect(config.agent.orchestrator.prompt).toContain("completion loop")
     expect(config.agent.orchestrator.prompt).toContain("different model family")
     expect(config.agent.orchestrator.prompt).toContain("no independent cross-family reviewer")
     expect(config.agent.orchestrator.prompt).toContain("Agent or general-purpose subagents")
-    expect(config.agent.orchestrator.prompt).toContain("concrete verification evidence")
+    expect(config.agent.orchestrator.prompt).toContain("concrete failed or blocked result")
     expect(config.agent.orchestrator.prompt).toContain("surface-level and cheap")
     expect(config.agent.orchestrator.prompt).toContain("worker owns repository exploration")
     expect(config.agent.orchestrator.permission).toBeDefined()
@@ -127,6 +129,16 @@ describe("agent flows plugin", () => {
     const output = { output: "Implemented the change." }
     await hooks["tool.execute.after"]?.({ callID: "valid" }, output)
     expect(output.output).toContain("Flow guardrail")
+
+    const markdownArgs = { subagent_type: "routine", description: markdownWorkPacket }
+    await hooks["tool.execute.before"]?.({ tool: "task", sessionID: "root", callID: "markdown" }, { args: markdownArgs })
+    expect(markdownArgs.description).toContain("Worker Execution Contract")
+  })
+
+  test("requires routine evidence before deep escalation", async () => {
+    const hooks: any = await plugin({ client: { session: { get: async () => ({ data: { id: "root" } }), children: async () => ({ data: [] }), messages: async () => ({ data: [] }) } } })
+    await hooks["chat.message"]?.({ sessionID: "root", agent: "orchestrator", messageID: "run" }, { message: { id: "run", role: "user", time: { created: Date.now() } } })
+    await expect(hooks["tool.execute.before"]?.({ tool: "task", sessionID: "root", callID: "deep" }, { args: { subagent_type: "deep", description: `${markdownWorkPacket}\n# Escalation Evidence\nArchitecture is difficult.` } })).rejects.toThrow("failed or blocked routine attempt")
   })
 
   test("technically blocks mutating evaluator tools", async () => {

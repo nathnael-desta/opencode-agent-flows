@@ -123,6 +123,11 @@ behavior. Workers must return a structured report with changed files,
 verification, scope changes, and blockers; malformed reports are flagged to the
 orchestrator before it can accept or escalate the result.
 
+Deep escalation is technically cheap-first: architecture and other high-risk
+work goes to the routine worker with strict stop conditions. The plugin rejects
+Deep unless the current run already contains a failed or blocked routine result,
+and every Deep call requires explicit one-use user approval.
+
 ## Release
 
 `make check` runs the complete validation suite and previews the npm package.

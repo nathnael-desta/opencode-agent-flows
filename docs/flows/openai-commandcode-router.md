@@ -63,7 +63,7 @@ sequenceDiagram
 | `bulk` | bulk-worker | `commandcode/mimo-v2.5` | default | commandcode-credits | No |
 | `routine` | worker | `commandcode/deepseek-v4-pro` | high | commandcode-credits | No |
 | `reviewer` | reviewer | `commandcode/mimo-v2.5-pro` | default | commandcode-credits | No |
-| `deep` | escalation | `openai/gpt-5.6-terra` | high | chatgpt-subscription | No |
+| `deep` | escalation | `openai/gpt-5.6-terra` | high | chatgpt-subscription | Yes |
 | `extreme-medium` | escalation | `openai/gpt-5.6-sol` | medium | chatgpt-subscription | Yes |
 | `extreme-high` | escalation | `openai/gpt-5.6-sol` | high | chatgpt-subscription | Yes |
 
@@ -71,15 +71,15 @@ sequenceDiagram
 
 - Send repetitive, low-risk, token-heavy transformations to bulk.
 - Send bounded routine implementation, exploration, and fast-path work with clear acceptance criteria to routine.
-- Use deep only for high-risk work or evidence-backed residue after routine exhausts its bounded retries; provide the blocker, diff, and verification evidence.
+- Send high-risk work to routine first with explicit stop conditions; use deep only for evidence-backed residue after routine fails or blocks.
 - Use reviewer selectively for missing or failed verification, high-risk changes, and configured samples.
 - When a workflow explicitly requests code review, prefer reviewer and keep the reviewer in a different model family from the implementation worker where possible.
 
 ### Escalation
 
 - Do not escalate merely because a task is long or spans multiple files.
-- Escalate to deep after routine exhausts its bounded retries only when deterministic verification, requirements, or repository evidence identify a concrete blocker.
-- extreme-medium and extreme-high require an explicit approval token from the plugin.
+- Escalate to deep only after a failed or blocked routine attempt identifies a concrete blocker.
+- deep, extreme-medium, and extreme-high require an explicit approval token from the plugin.
 - A worker may retry bounded verification failures before escalating.
 
 ### Verification
