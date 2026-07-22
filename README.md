@@ -111,9 +111,8 @@ The plugin enforces medium/high escalation with a one-use OpenCode permission
 prompt. Worker tool calls also have protected-path guardrails for sensitive
 areas such as authentication, billing, infrastructure, and migrations.
 
-Routine delegations require a labelled work packet: Objective, Scope,
-Constraints, Acceptance, Verification, Escalate When, and Return. The plugin
-caps that packet at 3,000 characters and directs the orchestrator to describe
+Routine delegations accept a concise free-form packet. The plugin caps it at
+3,000 characters and directs the orchestrator to describe
 observable outcomes and subsystem boundaries rather than inspect files or
 produce a detailed implementation plan. Repository exploration, file selection,
 and implementation design belong to the economical worker. The plugin

@@ -19,7 +19,6 @@ bun test
 Requirements conflict.
 # Return:
 Changed files and evidence.`
-const markdownWorkPacket = workPacket.replaceAll(":\n", "\n")
 
 afterEach(async () => {
   await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })))
@@ -115,12 +114,11 @@ describe("agent flows plugin", () => {
     ).rejects.toThrow("2-attempt limit")
   })
 
-  test("requires work packets and flags malformed worker reports", async () => {
+  test("caps routine packets and flags malformed worker reports", async () => {
     const hooks: any = await plugin({
       client: { session: { get: async () => ({ data: { id: "root" } }), children: async () => ({ data: [] }), messages: async () => ({ data: [] }) } },
     })
     await hooks["chat.message"]?.({ sessionID: "root", agent: "orchestrator", messageID: "run" }, { message: { id: "run", role: "user", time: { created: Date.now() } } })
-    await expect(hooks["tool.execute.before"]?.({ tool: "task", sessionID: "root", callID: "invalid" }, { args: { subagent_type: "routine", description: "Fix it" } })).rejects.toThrow("routine requires a work packet")
     await expect(hooks["tool.execute.before"]?.({ tool: "task", sessionID: "root", callID: "oversized" }, { args: { subagent_type: "routine", description: `${workPacket}\n${"x".repeat(3_000)}` } })).rejects.toThrow("surface-level planning budget")
 
     const args = { subagent_type: "routine", description: workPacket }
@@ -130,15 +128,15 @@ describe("agent flows plugin", () => {
     await hooks["tool.execute.after"]?.({ callID: "valid" }, output)
     expect(output.output).toContain("Flow guardrail")
 
-    const markdownArgs = { subagent_type: "routine", description: markdownWorkPacket }
-    await hooks["tool.execute.before"]?.({ tool: "task", sessionID: "root", callID: "markdown" }, { args: markdownArgs })
-    expect(markdownArgs.description).toContain("Worker Execution Contract")
+    const conciseArgs = { subagent_type: "routine", description: "Implement the approved R2 milestone and stop if its constraints cannot be met." }
+    await hooks["tool.execute.before"]?.({ tool: "task", sessionID: "root", callID: "concise" }, { args: conciseArgs })
+    expect(conciseArgs.description).toContain("Worker Execution Contract")
   })
 
   test("requires routine evidence before deep escalation", async () => {
     const hooks: any = await plugin({ client: { session: { get: async () => ({ data: { id: "root" } }), children: async () => ({ data: [] }), messages: async () => ({ data: [] }) } } })
     await hooks["chat.message"]?.({ sessionID: "root", agent: "orchestrator", messageID: "run" }, { message: { id: "run", role: "user", time: { created: Date.now() } } })
-    await expect(hooks["tool.execute.before"]?.({ tool: "task", sessionID: "root", callID: "deep" }, { args: { subagent_type: "deep", description: `${markdownWorkPacket}\n# Escalation Evidence\nArchitecture is difficult.` } })).rejects.toThrow("failed or blocked routine attempt")
+    await expect(hooks["tool.execute.before"]?.({ tool: "task", sessionID: "root", callID: "deep" }, { args: { subagent_type: "deep", description: "Architecture is difficult." } })).rejects.toThrow("failed or blocked routine attempt")
   })
 
   test("technically blocks mutating evaluator tools", async () => {
