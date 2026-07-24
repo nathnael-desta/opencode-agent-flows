@@ -20,7 +20,7 @@ function render(flow: FlowDefinition): string {
     .join("\n")
   const agentRows = Object.entries(flow.agents).map(([name, agent]) => {
     const metadata = flow.agentMetadata[name]
-    return `| \`${name}\` | ${metadata?.role ?? "unknown"} | \`${agent.model}\` | ${agent.variant ?? "default"} | ${metadata?.billingSource ?? "unknown"} | ${metadata?.requiresApproval ? "Yes" : "No"} |`
+    return `| \`${name}\` | ${metadata?.role ?? "unknown"} | \`${agent.model}\` | ${agent.variant ?? "default"} | ${agent.steps ?? "unbounded"} | ${metadata?.billingSource ?? "unknown"} | ${metadata?.requiresApproval ? "Yes" : "No"} |`
   }).join("\n")
   const detailedSteps = Object.entries(flow.agentMetadata)
     .filter(([name]) => name !== flow.defaultAgent)
@@ -59,8 +59,8 @@ ${detailedSteps}
 
 ### Agents
 
-| Agent | Role | Model | Effort | Billing source | Approval required |
-|---|---|---|---|---|---|
+| Agent | Role | Model | Effort | Steps | Billing source | Approval required |
+|---|---|---|---|---:|---|---|
 ${agentRows}
 
 ### Routing
@@ -78,9 +78,15 @@ ${flow.escalationRules.map((rule) => `- ${rule}`).join("\n")}
 - Full-suite threshold: ${flow.verification.fullSuiteRisk} risk
 - The plugin records observed checks; passing checks are evidence, not proof of correctness.
 
+### Orchestration
+
+- Maximum delegated tasks per run: ${flow.orchestration.maxTasksPerRun}
+- Maximum concurrent workers: ${flow.orchestration.maxConcurrentWorkers}
+- Independent work may run as a parallel frontier; dependent or overlapping work remains serial.
+
 ### Reviewer
 
-${flow.reviewer ? `The \`${flow.reviewer.agent}\` agent is ${flow.reviewer.enabled ? "enabled" : "disabled"} by default. Triggers: ${flow.reviewer.triggers.join(", ")}. Sample rate: ${Math.round(flow.reviewer.sampleRate * 100)}%.` : "No reviewer is configured."}
+${flow.reviewer ? `The \`${flow.reviewer.agent}\` agent is ${flow.reviewer.enabled ? "enabled" : "disabled"} by default. Triggers: ${flow.reviewer.triggers.join(", ")}. Sample rate: ${Math.round(flow.reviewer.sampleRate * 100)}%. Maximum rounds: ${flow.reviewer.maxRounds}. Maximum findings per round: ${flow.reviewer.maxFindings}. Maximum packet size: ${flow.reviewer.maxPacketChars} characters.` : "No reviewer is configured."}
 
 ### Telemetry
 

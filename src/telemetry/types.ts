@@ -47,6 +47,8 @@ export interface ModelUsage {
   modelID: string
   agents: string[]
   billingSources: string[]
+  assistantMessages: number
+  /** @deprecated Use assistantMessages. */
   calls: number
   errors: number
   costUsd: number
@@ -63,6 +65,8 @@ export interface AgentUsage {
   billingSource: string
   modelID: string
   sessions: number
+  assistantMessages: number
+  /** @deprecated Use assistantMessages. */
   calls: number
   costUsd: number
   apiEquivalentCostUsd: number
@@ -76,15 +80,35 @@ export interface TaskTrace {
   callID: string
   sessionID: string
   runID?: string
+  taskID?: string
   agent?: string
   description?: string
   model?: string
-  status: "running" | "completed" | "failed"
+  status: "running" | "completed" | "blocked" | "failed" | "invalid-output"
   workReport?: WorkReport
   workReportError?: string
+  reviewReport?: ReviewReport
+  reviewReportError?: string
+  error?: string
+  workspace?: string
   startedAt: number
   completedAt?: number
   linkConfidence: "explicit" | "correlated" | "unlinked"
+}
+
+export interface ReviewFinding {
+  severity: "critical" | "high" | "medium" | "low"
+  title: string
+  evidence: string
+  file?: string
+  line?: number
+  verification?: string
+}
+
+export interface ReviewReport {
+  verdict: "pass" | "changes-requested" | "blocked"
+  summary: string
+  findings: ReviewFinding[]
 }
 
 export interface WorkReport {
@@ -139,12 +163,15 @@ export interface QuotaSnapshot {
 }
 
 export interface ReportTotals {
+  assistantMessages: number
+  /** @deprecated Use assistantMessages. */
   calls: number
   errors: number
   subagentsSpawned: number
   tasksStarted: number
   tasksCompleted: number
   taskFailures: number
+  taskInvalidOutputs: number
   verificationRuns: number
   verificationFailures: number
   retries: number
@@ -159,7 +186,7 @@ export interface ReportTotals {
 }
 
 export interface FlowReport {
-  schemaVersion: 3
+  schemaVersion: 4
   scope: "run" | "session"
   generatedAt: string
   flowID: string

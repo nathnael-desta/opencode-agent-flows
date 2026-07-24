@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { mkdtemp, rm } from "node:fs/promises"
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import plugin from "../plugin.js"
@@ -19,6 +19,26 @@ bun test
 Requirements conflict.
 # Return:
 Changed files and evidence.`
+const reviewPacket = `# Review Milestone:
+Substantial reliability changes before handoff.
+# Acceptance:
+Budgets and failure states are enforced.
+# Change Set:
+Review the supplied plugin diff.
+# Verification:
+bun test and tsc --noEmit passed.
+# Risk:
+standard`
+
+function client() {
+  return {
+    session: {
+      get: async ({ path }: { path: { id: string } }) => ({ data: path.id === "child" ? { id: "child", parentID: "root" } : { id: "root" } }),
+      children: async () => ({ data: [] }),
+      messages: async () => ({ data: [] }),
+    },
+  }
+}
 
 afterEach(async () => {
   await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })))
@@ -40,7 +60,10 @@ describe("agent flows plugin", () => {
     expect(config.agent.deep.model).toBe("openai/gpt-5.6-terra")
     expect(config.agent.deep.variant).toBe("high")
     expect(config.agent.deep.description).toContain("Escalation-only")
-    expect(config.agent.orchestrator.prompt).toContain("completion loop")
+    expect(config.agent.orchestrator.prompt).toContain("bounded unit")
+    expect(config.agent.orchestrator.prompt).toContain("milestone gate")
+    expect(config.agent.orchestrator.prompt).toContain("stop after two total rounds")
+    expect(config.agent.orchestrator.prompt).toContain("Dispatch up to three")
     expect(config.agent.orchestrator.prompt).toContain("different model family")
     expect(config.agent.orchestrator.prompt).toContain("no independent cross-family reviewer")
     expect(config.agent.orchestrator.prompt).toContain("Agent or general-purpose subagents")
@@ -49,6 +72,8 @@ describe("agent flows plugin", () => {
     expect(config.agent.orchestrator.prompt).toContain("worker owns repository exploration")
     expect(config.agent.orchestrator.permission).toBeDefined()
     expect(config.agent.routine.permission.task).toBe("deny")
+    expect(config.agent.orchestrator.steps).toBe(30)
+    expect(config.agent.reviewer.steps).toBe(12)
   })
 
   test("preserves user agent overrides and existing default", async () => {
@@ -128,11 +153,132 @@ describe("agent flows plugin", () => {
     )
     const args = { subagent_type: "routine", description: workPacket }
     await hooks["tool.execute.before"]?.({ tool: "task", sessionID: "root", callID: "one" }, { args })
+    await hooks["tool.execute.after"]?.({ callID: "one" }, { output: '<flow-work-report>{"status":"completed","summary":"first","filesChanged":[],"verification":[],"scopeChanges":[]}</flow-work-report>' })
     await hooks["tool.execute.before"]?.({ tool: "task", sessionID: "root", callID: "two" }, { args })
+    await hooks["tool.execute.after"]?.({ callID: "two" }, { output: '<flow-work-report>{"status":"completed","summary":"second","filesChanged":[],"verification":[],"scopeChanges":[]}</flow-work-report>' })
 
     await expect(
       hooks["tool.execute.before"]?.({ tool: "task", sessionID: "root", callID: "three" }, { args }),
     ).rejects.toThrow("2-attempt limit")
+  })
+
+  test("keys retries by stable Task ID instead of mutable packet wording", async () => {
+    const hooks: any = await plugin({ client: client() }, { verification: { maxWorkerAttempts: 1 } })
+    await hooks["chat.message"]?.({ sessionID: "root", agent: "orchestrator", messageID: "run" }, { message: { id: "run", role: "user", time: { created: Date.now() } } })
+    await hooks["tool.execute.before"]?.(
+      { tool: "task", sessionID: "root", callID: "one" },
+      { args: { subagent_type: "routine", description: `# Task ID: parser-fix\n${workPacket}` } },
+    )
+    await hooks["tool.execute.after"]?.({ callID: "one" }, { output: '<flow-work-report>{"status":"completed","summary":"done","filesChanged":[],"verification":[],"scopeChanges":[]}</flow-work-report>' })
+    await expect(hooks["tool.execute.before"]?.(
+      { tool: "task", sessionID: "root", callID: "two" },
+      { args: { subagent_type: "routine", description: `# Task ID: parser-fix\n${workPacket.replace("requested behavior", "same parser behavior with different wording")}` } },
+    )).rejects.toThrow("task parser-fix")
+  })
+
+  test("enforces task and concurrent worker budgets", async () => {
+    const hooks: any = await plugin(
+      { client: client() },
+      { orchestration: { maxTasksPerRun: 2, maxConcurrentWorkers: 1 }, verification: { maxWorkerAttempts: 5 } },
+    )
+    await hooks["chat.message"]?.({ sessionID: "root", agent: "orchestrator", messageID: "run" }, { message: { id: "run", role: "user", time: { created: Date.now() } } })
+    await hooks["tool.execute.before"]?.({ tool: "task", sessionID: "root", callID: "one" }, { args: { subagent_type: "routine", description: `# Task ID: one\n${workPacket}` } })
+    await expect(hooks["tool.execute.before"]?.({ tool: "task", sessionID: "root", callID: "concurrent" }, { args: { subagent_type: "routine", description: `# Task ID: two\n${workPacket}` } })).rejects.toThrow("concurrency limit")
+    await hooks["tool.execute.after"]?.({ callID: "one" }, { output: '<flow-work-report>{"status":"completed","summary":"done","filesChanged":[],"verification":[],"scopeChanges":[]}</flow-work-report>' })
+    await hooks["tool.execute.before"]?.({ tool: "task", sessionID: "root", callID: "two" }, { args: { subagent_type: "routine", description: `# Task ID: two\n${workPacket}` } })
+    await hooks["tool.execute.after"]?.({ callID: "two" }, { output: '<flow-work-report>{"status":"completed","summary":"done","filesChanged":[],"verification":[],"scopeChanges":[]}</flow-work-report>' })
+    await expect(hooks["tool.execute.before"]?.({ tool: "task", sessionID: "root", callID: "three" }, { args: { subagent_type: "routine", description: `# Task ID: three\n${workPacket}` } })).rejects.toThrow("2-task delegation budget")
+  })
+
+  test("enforces compact milestone review packets and a two-round ceiling", async () => {
+    const hooks: any = await plugin({ client: client() })
+    await hooks["chat.message"]?.({ sessionID: "root", agent: "orchestrator", messageID: "run" }, { message: { id: "run", role: "user", time: { created: Date.now() } } })
+    await expect(hooks["tool.execute.before"]?.(
+      { tool: "task", sessionID: "root", callID: "bad-review" },
+      { args: { subagent_type: "reviewer", description: "Review this." } },
+    )).rejects.toThrow("missing headings")
+
+    const first = { subagent_type: "reviewer", description: reviewPacket }
+    await hooks["tool.execute.before"]?.({ tool: "task", sessionID: "root", callID: "review-one" }, { args: first })
+    expect(first.description).toContain("Review Execution Contract")
+    await hooks["tool.execute.after"]?.(
+      { callID: "review-one" },
+      { output: '<flow-review>{"verdict":"changes-requested","summary":"one bug","findings":[{"severity":"high","title":"Bug","evidence":"Concrete failure","verification":"bun test"}]}</flow-review>' },
+    )
+    await expect(hooks["tool.execute.before"]?.(
+      { tool: "task", sessionID: "root", callID: "review-two-missing" },
+      { args: { subagent_type: "reviewer", description: reviewPacket } },
+    )).rejects.toThrow("second review requires headings")
+
+    const secondDescription = `${reviewPacket}\n# Finding Disposition:\nAgreed and fixed Bug.\n# Non-trivial Fixes:\nChanged task status handling.`
+    await hooks["tool.execute.before"]?.({ tool: "task", sessionID: "root", callID: "review-two" }, { args: { subagent_type: "reviewer", description: secondDescription } })
+    await hooks["tool.execute.after"]?.({ callID: "review-two" }, { output: '<flow-review>{"verdict":"pass","summary":"fixed","findings":[]}</flow-review>' })
+    await expect(hooks["tool.execute.before"]?.(
+      { tool: "task", sessionID: "root", callID: "review-three" },
+      { args: { subagent_type: "reviewer", description: secondDescription } },
+    )).rejects.toThrow("2-round limit")
+  })
+
+  test("matches protected path segments without blocking translations", async () => {
+    const hooks: any = await plugin({ client: client() })
+    await hooks["chat.message"]?.({ sessionID: "child", agent: "routine", messageID: "child-message" }, { message: { id: "child-message", role: "user", time: { created: Date.now() } } })
+    await hooks["tool.execute.before"]?.({ tool: "read", sessionID: "child", callID: "auth-read" }, { args: { filePath: "src/auth/session.ts" } })
+    await hooks["tool.execute.before"]?.({ tool: "edit", sessionID: "child", callID: "translations" }, { args: { filePath: "src/translations.py" } })
+    await expect(hooks["tool.execute.before"]?.(
+      { tool: "edit", sessionID: "child", callID: "auth" },
+      { args: { filePath: "src/auth/session.ts" } },
+    )).rejects.toThrow("matched auth")
+  })
+
+  test("runs and integrates an isolated worker through the Rift tools", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "agent-flow-rift-plugin-"))
+    const storage = await mkdtemp(join(tmpdir(), "agent-flow-rift-storage-"))
+    temporaryDirectories.push(directory, storage)
+    await writeFile(join(directory, "base.txt"), "dirty user state")
+    await writeFile(join(directory, ".rift"), "test-root")
+    const executable = join(storage, "fake-rift")
+    await writeFile(executable, `#!/bin/sh
+set -eu
+case "$1" in
+  create)
+    destination="${storage}/$3"
+    mkdir -p "$destination"
+    cp -a "$PWD/." "$destination/"
+    printf '%s\\n' "$destination"
+    ;;
+  remove)
+    target="$PWD"
+    cd /
+    rm -rf "$target"
+    ;;
+  gc|init) ;;
+  --version) printf 'rift-test 1.0\\n' ;;
+esac
+`)
+    await chmod(executable, 0o755)
+
+    const sessions = {
+      get: async ({ path }: { path: { id: string } }) => ({ data: path.id === "rift-child" ? { id: "rift-child", parentID: "root" } : { id: "root" } }),
+      children: async () => ({ data: [] }),
+      messages: async () => ({ data: [] }),
+      create: async () => ({ data: { id: "rift-child" } }),
+      prompt: async ({ query }: { query: { directory: string } }) => {
+        await writeFile(join(query.directory, "worker.txt"), "isolated output")
+        return { data: { parts: [{ type: "text", text: '<flow-work-report>{"status":"completed","summary":"isolated","filesChanged":["worker.txt"],"verification":[],"scopeChanges":[]}</flow-work-report>' }] } }
+      },
+    }
+    const hooks: any = await plugin({ client: { session: sessions } }, { rift: { enabled: true, command: executable } })
+    await hooks["chat.message"]?.({ sessionID: "root", agent: "orchestrator", messageID: "run" }, { message: { id: "run", role: "user", time: { created: Date.now() } } })
+    const context = { sessionID: "root", messageID: "message", agent: "orchestrator", directory, worktree: directory, abort: new AbortController().signal, metadata() {}, async ask() {} }
+    await hooks.tool.flow_rift_begin.execute({}, context)
+    const args = { task_id: "isolated-worker", subagent_type: "routine", description: workPacket }
+    await hooks["tool.execute.before"]?.({ tool: "flow_rift_task", sessionID: "root", callID: "rift-task" }, { args })
+    const output = { output: await hooks.tool.flow_rift_task.execute(args, context) }
+    await hooks["tool.execute.after"]?.({ callID: "rift-task" }, output)
+    await hooks.tool.flow_rift_integrate.execute({ task_ids: ["isolated-worker"] }, context)
+
+    expect(await readFile(join(directory, "worker.txt"), "utf8")).toBe("isolated output")
+    expect(await readFile(join(directory, "base.txt"), "utf8")).toBe("dirty user state")
   })
 
   test("caps routine packets and flags malformed worker reports", async () => {
@@ -154,10 +300,36 @@ describe("agent flows plugin", () => {
     expect(conciseArgs.description).toContain("Worker Execution Contract")
   })
 
+  test("surfaces persisted child model errors for empty task output", async () => {
+    const hooks: any = await plugin({
+      client: {
+        session: {
+          get: async () => ({ data: { id: "root" } }),
+          children: async () => ({ data: [{ id: "child", parentID: "root" }] }),
+          messages: async ({ path }: { path: { id: string } }) => ({
+            data: path.id === "child"
+              ? [{ info: { role: "assistant", time: { created: Date.now() }, error: { name: "ProviderError", data: { message: "weekly usage limit reached" } } } }]
+              : [],
+          }),
+        },
+      },
+    })
+    await hooks["chat.message"]?.({ sessionID: "root", agent: "orchestrator", messageID: "run" }, { message: { id: "run", role: "user", time: { created: Date.now() - 10 } } })
+    await hooks["tool.execute.before"]?.({ tool: "task", sessionID: "root", callID: "empty" }, { args: { subagent_type: "routine", description: workPacket } })
+    const output = { output: "" }
+    await hooks["tool.execute.after"]?.({ callID: "empty" }, output)
+
+    expect(output.output).toContain("weekly usage limit reached")
+    expect(output.output).toContain("Flow task failure")
+  })
+
   test("requires routine evidence before deep escalation", async () => {
     const hooks: any = await plugin({ client: { session: { get: async () => ({ data: { id: "root" } }), children: async () => ({ data: [] }), messages: async () => ({ data: [] }) } } })
     await hooks["chat.message"]?.({ sessionID: "root", agent: "orchestrator", messageID: "run" }, { message: { id: "run", role: "user", time: { created: Date.now() } } })
     await expect(hooks["tool.execute.before"]?.({ tool: "task", sessionID: "root", callID: "deep" }, { args: { subagent_type: "deep", description: "Architecture is difficult." } })).rejects.toThrow("failed or blocked routine attempt")
+    await hooks["tool.execute.before"]?.({ tool: "task", sessionID: "root", callID: "malformed" }, { args: { subagent_type: "routine", description: workPacket } })
+    await hooks["tool.execute.after"]?.({ callID: "malformed" }, { output: "Substantive prose without a report marker." })
+    await expect(hooks["tool.execute.before"]?.({ tool: "task", sessionID: "root", callID: "deep-after-invalid" }, { args: { subagent_type: "deep", description: "The report was malformed." } })).rejects.toThrow("failed or blocked routine attempt")
   })
 
   test("technically blocks mutating evaluator tools", async () => {
@@ -181,5 +353,14 @@ describe("agent flows plugin", () => {
         { args: { filePath: "src/app.ts" } },
       ),
     ).rejects.toThrow("read-only")
+  })
+
+  test("reserves Rift lifecycle tools for the root orchestrator", async () => {
+    const hooks: any = await plugin({ client: client() }, { rift: { enabled: true } })
+    await hooks["chat.message"]?.({ sessionID: "child", agent: "routine", messageID: "worker" }, { message: { id: "worker", role: "user", time: { created: Date.now() } } })
+    await expect(hooks["tool.execute.before"]?.(
+      { tool: "flow_rift_begin", sessionID: "child", callID: "rift" },
+      { args: {} },
+    )).rejects.toThrow("Only the root orchestrator")
   })
 })

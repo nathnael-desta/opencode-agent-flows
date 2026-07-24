@@ -102,10 +102,10 @@ OpenCode loads `plugin.ts` at startup and calls its `config` hook. The plugin:
 The orchestrator is a normal primary OpenCode agent. Its prompt tells it when
 to delegate through OpenCode's task tool. A delegated subagent performs its own
 model call; Sol low chooses the worker but does not simulate the worker's
-reasoning. After each delegation, the orchestrator inspects the result and
-continues assigning units of work until verification passes or user input is
-required. This is OpenCode's normal in-session tool loop, not an unbounded
-external process that restarts failed sessions forever.
+reasoning. The orchestrator dispatches independent units as a bounded frontier,
+integrates them, and continues only within hard task, concurrency, retry,
+review, and agent-step limits. This is OpenCode's normal in-session tool loop,
+not an unbounded external process that restarts failed sessions forever.
 
 The plugin enforces medium/high escalation with a one-use OpenCode permission
 prompt. Worker tool calls also have protected-path guardrails for sensitive
@@ -119,8 +119,18 @@ and implementation design belong to the economical worker. The plugin
 appends a worker contract that permits correcting inaccurate file assumptions
 from repository evidence, but prohibits silently broadening the requested
 behavior. Workers must return a structured report with changed files,
-verification, scope changes, and blockers; malformed reports are flagged to the
-orchestrator before it can accept or escalate the result.
+verification, scope changes, and blockers. Malformed reports become explicit
+invalid-output failures and cannot trigger a separate model task merely to
+repair formatting.
+
+Review is a milestone gate, not a per-commit gate. MiMo V2.5 Pro reviews one
+compact accumulated changeset after deterministic checks, with a normal limit
+of one round and a hard ceiling of two rounds after non-trivial fixes.
+
+Optional Rift integration gives concurrent writers copy-on-write snapshots of
+the exact dirty workspace. A central integration step rejects undeclared files,
+worker conflicts, and source files changed after the baseline. Rift remains
+experimental and must be enabled explicitly on a supported filesystem.
 
 Deep escalation is technically cheap-first: architecture and other high-risk
 work goes to the routine worker with strict stop conditions. The plugin rejects

@@ -57,15 +57,15 @@ sequenceDiagram
 
 ### Agents
 
-| Agent | Role | Model | Effort | Billing source | Approval required |
-|---|---|---|---|---|---|
-| `orchestrator` | orchestrator | `openai/gpt-5.6-sol` | low | chatgpt-subscription | No |
-| `bulk` | bulk-worker | `commandcode/mimo-v2.5` | default | commandcode-credits | No |
-| `routine` | worker | `commandcode/deepseek-v4-pro` | high | commandcode-credits | No |
-| `reviewer` | reviewer | `commandcode/mimo-v2.5-pro` | default | commandcode-credits | No |
-| `deep` | escalation | `openai/gpt-5.6-terra` | high | chatgpt-subscription | Yes |
-| `extreme-medium` | escalation | `openai/gpt-5.6-sol` | medium | chatgpt-subscription | Yes |
-| `extreme-high` | escalation | `openai/gpt-5.6-sol` | high | chatgpt-subscription | Yes |
+| Agent | Role | Model | Effort | Steps | Billing source | Approval required |
+|---|---|---|---|---:|---|---|
+| `orchestrator` | orchestrator | `openai/gpt-5.6-sol` | low | 30 | chatgpt-subscription | No |
+| `bulk` | bulk-worker | `commandcode/mimo-v2.5` | default | 12 | commandcode-credits | No |
+| `routine` | worker | `commandcode/deepseek-v4-pro` | high | 24 | commandcode-credits | No |
+| `reviewer` | reviewer | `commandcode/mimo-v2.5-pro` | default | 12 | commandcode-credits | No |
+| `deep` | escalation | `openai/gpt-5.6-terra` | high | 24 | chatgpt-subscription | Yes |
+| `extreme-medium` | escalation | `openai/gpt-5.6-sol` | medium | 30 | chatgpt-subscription | Yes |
+| `extreme-high` | escalation | `openai/gpt-5.6-sol` | high | 30 | chatgpt-subscription | Yes |
 
 ### Routing
 
@@ -89,9 +89,15 @@ sequenceDiagram
 - Full-suite threshold: high risk
 - The plugin records observed checks; passing checks are evidence, not proof of correctness.
 
+### Orchestration
+
+- Maximum delegated tasks per run: 12
+- Maximum concurrent workers: 3
+- Independent work may run as a parallel frontier; dependent or overlapping work remains serial.
+
 ### Reviewer
 
-The `reviewer` agent is enabled by default. Triggers: failed-verification, missing-verification, high-risk, sampled. Sample rate: 10%.
+The `reviewer` agent is enabled by default. Triggers: explicit, milestone, high-risk, sampled. Sample rate: 10%. Maximum rounds: 2. Maximum findings per round: 5. Maximum packet size: 12000 characters.
 
 ### Telemetry
 

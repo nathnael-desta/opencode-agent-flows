@@ -21,13 +21,13 @@ function apiCost(cost: number, unpriced: number): string {
 
 export function flowReportMarkdown(report: FlowReport): string {
   const title = report.scope === "run" ? "Run Report" : "Session Report"
-  const modelRows = report.byModel.length === 0 ? ["No model calls recorded."] : [
-    "| Model | Calls | Input | Output | Metered | API-equivalent |",
+  const modelRows = report.byModel.length === 0 ? ["No assistant messages recorded."] : [
+    "| Model | Assistant messages | Input | Output | Metered | API-equivalent |",
     "|---|---:|---:|---:|---:|---:|",
     ...report.byModel.map((model) => `| ${model.providerID}/${model.modelID} | ${model.calls} | ${model.tokens.input.toLocaleString()} | ${(model.tokens.output + model.tokens.reasoning).toLocaleString()} | $${model.costUsd.toFixed(4)} | ${apiCost(model.apiEquivalentCostUsd, model.apiEquivalentUnpricedCalls)} |`),
   ]
-  const agentRows = report.byAgent.length === 0 ? ["No agent calls recorded."] : [
-    "| Agent | Role | Model | Billing | Calls | Metered | API-equivalent |",
+  const agentRows = report.byAgent.length === 0 ? ["No agent messages recorded."] : [
+    "| Agent | Role | Model | Billing | Assistant messages | Metered | API-equivalent |",
     "|---|---|---|---|---:|---:|---:|",
     ...report.byAgent.map((agent) => `| ${agent.agent} | ${agent.role} | ${agent.modelID} | ${agent.billingSource} | ${agent.calls} | $${agent.costUsd.toFixed(4)} | ${apiCost(agent.apiEquivalentCostUsd, agent.apiEquivalentUnpricedCalls)} |`),
   ]
@@ -35,6 +35,11 @@ export function flowReportMarkdown(report: FlowReport): string {
     "| Agent | Status | Files | Verification | Note |",
     "|---|---|---:|---:|---|",
     ...report.tasks.filter((task) => task.workReport || task.workReportError).map((task) => `| ${task.agent ?? "unknown"} | ${task.workReport?.status ?? "incomplete"} | ${task.workReport?.filesChanged.length ?? 0} | ${task.workReport?.verification.length ?? 0} | ${task.workReportError ?? task.workReport?.blocker ?? ""} |`),
+  ]
+  const reviewRows = report.tasks.filter((task) => task.reviewReport || task.reviewReportError).length === 0 ? ["No milestone reviews recorded."] : [
+    "| Verdict | Findings | Summary / error |",
+    "|---|---:|---|",
+    ...report.tasks.filter((task) => task.reviewReport || task.reviewReportError).map((task) => `| ${task.reviewReport?.verdict ?? "invalid-output"} | ${task.reviewReport?.findings.length ?? 0} | ${task.reviewReportError ?? task.reviewReport?.summary ?? ""} |`),
   ]
   return [
     `# ${title}: ${report.flowTitle}`,
@@ -46,8 +51,9 @@ export function flowReportMarkdown(report: FlowReport): string {
     "|---|---:|",
     `| Subagents spawned | ${report.totals.subagentsSpawned} |`,
     `| Tasks completed / started | ${report.totals.tasksCompleted} / ${report.totals.tasksStarted} |`,
+    `| Invalid task outputs | ${report.totals.taskInvalidOutputs ?? 0} |`,
     `| Verification failures | ${report.totals.verificationFailures} |`,
-    `| Model calls | ${report.totals.calls} |`,
+    `| Assistant messages | ${report.totals.assistantMessages ?? report.totals.calls} |`,
     `| Time used | ${duration(report.durationMs)} |`,
     `| Metered cost | $${report.totals.costUsd.toFixed(4)} |`,
     `| API-equivalent cost | ${apiCost(report.totals.apiEquivalentCostUsd, report.totals.apiEquivalentUnpricedCalls)} |`,
@@ -60,6 +66,9 @@ export function flowReportMarkdown(report: FlowReport): string {
     "",
     "## Worker Reports",
     ...workReportRows,
+    "",
+    "## Milestone Reviews",
+    ...reviewRows,
     "",
     "## Quotas",
     ...(report.quotas.length > 0 ? report.quotas.map(quotaLine) : ["Unavailable"]),

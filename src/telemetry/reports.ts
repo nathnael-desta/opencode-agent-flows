@@ -19,12 +19,14 @@ import type {
 const emptyTokens = (): TokenUsage => ({ input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 })
 
 const emptyTotals = (): ReportTotals => ({
+  assistantMessages: 0,
   calls: 0,
   errors: 0,
   subagentsSpawned: 0,
   tasksStarted: 0,
   tasksCompleted: 0,
   taskFailures: 0,
+  taskInvalidOutputs: 0,
   verificationRuns: 0,
   verificationFailures: 0,
   retries: 0,
@@ -106,6 +108,7 @@ export function buildFlowReport(input: BuildReportInput): FlowReport {
       billingSource,
       modelID: "unknown",
       sessions: 0,
+      assistantMessages: 0,
       calls: 0,
       costUsd: 0,
       apiEquivalentCostUsd: 0,
@@ -120,18 +123,20 @@ export function buildFlowReport(input: BuildReportInput): FlowReport {
         message.role !== "assistant" ||
         !message.providerID ||
         !message.modelID ||
-        !message.tokens ||
+        (!message.tokens && !message.error) ||
         !messageInWindow(message, input.startedAt)
       ) continue
 
-      const units = workloadUnits(message.tokens)
+      const messageTokens = message.tokens ?? emptyTokens()
+      const units = workloadUnits(messageTokens)
       const evaluator = role === "evaluator"
       const modelKey = message.providerID + "/" + message.modelID
       const rates = lookupRate(modelKey, pricing)
-      const apiCost = rates ? computeApiEquivalentCost(message.tokens, rates) : 0
+      const apiCost = rates ? computeApiEquivalentCost(messageTokens, rates) : 0
 
       if (message.modelID) agent.modelID = modelKey
 
+      totals.assistantMessages += 1
       totals.calls += 1
       totals.errors += message.error ? 1 : 0
       totals.costUsd += message.costUsd ?? 0
@@ -143,8 +148,9 @@ export function buildFlowReport(input: BuildReportInput): FlowReport {
         totals.evaluatorApiEquivalentCostUsd += apiCost
       }
       totals.workloadUnits += units
-      addTokens(totals.tokens, message.tokens)
+      addTokens(totals.tokens, messageTokens)
 
+      agent.assistantMessages += 1
       agent.calls += 1
       agent.costUsd += message.costUsd ?? 0
       agent.apiEquivalentCostUsd += apiCost
@@ -160,6 +166,7 @@ export function buildFlowReport(input: BuildReportInput): FlowReport {
         modelID: message.modelID,
         agents: [],
         billingSources: [],
+        assistantMessages: 0,
         calls: 0,
         errors: 0,
         costUsd: 0,
@@ -171,6 +178,7 @@ export function buildFlowReport(input: BuildReportInput): FlowReport {
       }
       if (!model.agents.includes(agentName)) model.agents.push(agentName)
       if (!model.billingSources.includes(billingSource)) model.billingSources.push(billingSource)
+      model.assistantMessages += 1
       model.calls += 1
       model.errors += message.error ? 1 : 0
       model.costUsd += message.costUsd ?? 0
@@ -178,7 +186,7 @@ export function buildFlowReport(input: BuildReportInput): FlowReport {
       if (rates) model.apiEquivalentPricedCalls += 1
       else model.apiEquivalentUnpricedCalls += 1
       model.workloadUnits += units
-      addTokens(model.tokens, message.tokens)
+      addTokens(model.tokens, messageTokens)
       models.set(key, model)
     }
     agents.set(agentName, agent)
@@ -196,10 +204,11 @@ export function buildFlowReport(input: BuildReportInput): FlowReport {
   )
   totals.tasksStarted = tasks.length
   totals.tasksCompleted = tasks.filter((task) => task.status === "completed").length
-  totals.taskFailures = tasks.filter((task) => task.status === "failed").length
+  totals.taskInvalidOutputs = tasks.filter((task) => task.status === "invalid-output").length
+  totals.taskFailures = tasks.filter((task) => ["failed", "blocked", "invalid-output"].includes(task.status)).length
   totals.verificationRuns = verification.length
   totals.verificationFailures = verification.filter((item) => item.status === "failed").length
-  totals.retries = Math.max(0, tasks.length - new Set(tasks.map((task) => (task.agent ?? "unknown") + ":" + (task.description ?? task.id))).size)
+  totals.retries = Math.max(0, tasks.length - new Set(tasks.map((task) => (task.agent ?? "unknown") + ":" + (task.taskID ?? task.description ?? task.id))).size)
 
   const productionUnits = Math.max(0, totals.workloadUnits - [...agents.values()]
     .filter((agent) => agent.role === "evaluator")
@@ -210,7 +219,7 @@ export function buildFlowReport(input: BuildReportInput): FlowReport {
   const quotaSnapshots = input.quotas ?? []
 
   return {
-    schemaVersion: 3,
+    schemaVersion: 4,
     scope: input.runID ? "run" : "session",
     generatedAt: new Date().toISOString(),
     flowID: input.flow.id,
@@ -270,10 +279,10 @@ export function buildFlowReport(input: BuildReportInput): FlowReport {
 
 function addTotals(target: ReportTotals, source: ReportTotals): void {
   for (const key of [
-    "calls", "errors", "subagentsSpawned", "tasksStarted", "tasksCompleted", "taskFailures",
+    "assistantMessages", "calls", "errors", "subagentsSpawned", "tasksStarted", "tasksCompleted", "taskFailures", "taskInvalidOutputs",
     "verificationRuns", "verificationFailures", "retries", "costUsd", "evaluatorCostUsd",
     "apiEquivalentCostUsd", "evaluatorApiEquivalentCostUsd", "apiEquivalentPricedCalls", "apiEquivalentUnpricedCalls", "workloadUnits",
-  ] as const) target[key] += source[key]
+  ] as const) target[key] += source[key] ?? (key === "assistantMessages" ? source.calls : 0)
   addTokens(target.tokens, source.tokens)
 }
 

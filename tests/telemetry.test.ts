@@ -82,6 +82,22 @@ describe("model-independent telemetry", () => {
     expect(report.totals.verificationFailures).toBe(0)
   })
 
+  test("counts persisted assistant message errors", () => {
+    const report = buildFlowReport({
+      flow: openaiCommandCodeRouter,
+      rootSessionID: "root",
+      sessions: [{
+        id: "root",
+        agent: "orchestrator",
+        messages: [{ role: "assistant", providerID: "openai", modelID: "gpt", error: true }],
+      }],
+    })
+
+    expect(report.totals.calls).toBe(1)
+    expect(report.totals.errors).toBe(1)
+    expect(report.byModel[0]?.errors).toBe(1)
+  })
+
   test("reports configured API-equivalent pricing for subscription-backed calls", () => {
     const report = buildFlowReport({
       flow: openaiCommandCodeRouter,
@@ -207,7 +223,7 @@ describe("model-independent telemetry", () => {
     )
     await hooks["tool.execute.after"]?.(
       { tool: "task", sessionID: "root", callID: "task-1", args: {} },
-      { output: "complete", metadata: {} },
+      { output: 'complete\n<flow-work-report>{"status":"completed","summary":"done","filesChanged":[],"verification":[],"scopeChanges":[]}</flow-work-report>', metadata: {} },
     )
     await hooks["tool.execute.before"]?.(
       { tool: "task", sessionID: "root", callID: "task-failed" },
@@ -250,5 +266,36 @@ describe("model-independent telemetry", () => {
     expect(report.totals.taskFailures).toBe(1)
     expect(report.totals.verificationFailures).toBe(1)
     expect(toasts).toHaveLength(1)
+  })
+
+  test("preserves session task history across plugin restarts", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "agent-flow-restart-"))
+    temporaryDirectories.push(directory)
+    let createdAt = Date.now()
+    const client = {
+      session: {
+        get: async () => ({ data: { id: "root" } }),
+        children: async () => ({ data: [] }),
+        messages: async () => ({ data: [
+          { info: { id: "user", role: "user" as const, agent: "orchestrator", time: { created: createdAt } } },
+          { info: { id: "assistant", role: "assistant" as const, agent: "orchestrator", providerID: "openai", modelID: "gpt", tokens: { input: 1, output: 1 }, time: { created: createdAt + 1 } } },
+        ] }),
+      },
+    }
+    const completeRun = async (runID: string, taskID: string) => {
+      const hooks: any = await plugin({ client }, { telemetry: { reportDir: directory, runSummaryToast: false } })
+      await hooks["chat.message"]?.({ sessionID: "root", agent: "orchestrator", messageID: runID }, { message: { id: runID, role: "user", time: { created: createdAt } } })
+      await hooks["tool.execute.before"]?.({ tool: "task", sessionID: "root", callID: taskID }, { args: { subagent_type: "routine", description: `# Task ID: ${taskID}\n${workPacket}` } })
+      await hooks["tool.execute.after"]?.({ callID: taskID }, { output: '<flow-work-report>{"status":"completed","summary":"done","filesChanged":[],"verification":[],"scopeChanges":[]}</flow-work-report>' })
+      await hooks.event?.({ event: { type: "session.idle", properties: { sessionID: "root" } } })
+      createdAt += 100
+    }
+
+    await completeRun("run-one", "task-one")
+    await completeRun("run-two", "task-two")
+
+    const report = JSON.parse(await readFile(join(directory, "latest-session.json"), "utf8"))
+    expect(report.totals.tasksStarted).toBe(2)
+    expect(report.totals.tasksCompleted).toBe(2)
   })
 })

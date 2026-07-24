@@ -8,19 +8,49 @@ import { normalizePricing } from "./src/telemetry/pricing.js"
 import { commandCodeBudget, readCodexQuota } from "./src/telemetry/quota.js"
 import { buildFlowReport } from "./src/telemetry/reports.js"
 import { TelemetryStore } from "./src/telemetry/store.js"
-import type { DeveloperModeSnapshot, QualityEvidence, TaskTrace, VerificationEvidence, WorkReport } from "./src/telemetry/types.js"
+import type { DeveloperModeSnapshot, QualityEvidence, ReviewReport, TaskTrace, VerificationEvidence, WorkReport } from "./src/telemetry/types.js"
 import { flowReportMarkdown, globalReportMarkdown } from "./src/telemetry/markdown.js"
+import { integrateRiftWorkers, RiftClient, workspaceManifest } from "./src/rift.js"
+import type { RiftWorkerResult, WorkspaceManifest } from "./src/rift.js"
 
-interface RunState { id: string; rootSessionID: string; startedAt: number }
-interface SessionInfo { id: string; parentID?: string }
-interface RawMessage { id?: string; role: "user" | "assistant"; agent?: string; providerID?: string; modelID?: string; variant?: string; cost?: number; tokens?: Record<string, number>; time?: { created?: number; completed?: number } }
+interface RunState {
+  id: string
+  rootSessionID: string
+  startedAt: number
+}
+interface SessionInfo {
+  id: string
+  parentID?: string
+}
+interface RiftRunState {
+  runID: string
+  source: string
+  baselinePath: string
+  baseline: WorkspaceManifest
+  workers: Map<string, RiftWorkerResult>
+  workspaces: Set<string>
+}
+interface RawMessage {
+  id?: string
+  role: "user" | "assistant"
+  agent?: string
+  providerID?: string
+  modelID?: string
+  variant?: string
+  cost?: number
+  tokens?: Record<string, number>
+  error?: unknown
+  time?: { created?: number; completed?: number }
+}
 type ModelOverrides = Record<string, { model: string; variant?: string }>
 
 const DEFAULT_PROTECTED_PATHS = [".env", "auth", "billing", "infrastructure", "migrations"]
 const WORK_PACKET_HEADINGS = ["Objective", "Scope", "Constraints", "Acceptance", "Verification", "Escalate When", "Return"]
 const DEEP_PACKET_HEADINGS = [...WORK_PACKET_HEADINGS, "Escalation Evidence"]
 const MAX_WORK_PACKET_CHARS = 3_000
-const WORK_REPORT_CONTRACT = `\n\n## Worker Execution Contract\nInspect the repository before editing. Treat the packet's file and implementation assumptions as hypotheses: correct them when repository evidence requires it, but do not silently broaden the behavioral scope. Stop and report a blocker when the requirements conflict, the scope must expand, or safe verification is unavailable. End with exactly one <flow-work-report> JSON object: {"status":"completed|blocked","summary":"...","filesChanged":["..."],"verification":[{"command":"...","status":"passed|failed|not-run"}],"scopeChanges":["..."],"blocker":"optional"}.`
+const REVIEW_PACKET_HEADINGS = ["Review Milestone", "Acceptance", "Change Set", "Verification", "Risk"]
+const WORK_REPORT_CONTRACT = `\n\n## Worker Execution Contract\nInspect the repository before editing. Treat the packet's file and implementation assumptions as hypotheses: correct them when repository evidence requires it, but do not silently broaden the behavioral scope. Stop and report a blocker when the requirements conflict, the scope must expand, or safe verification is unavailable. End with exactly one <flow-work-report> JSON object: {"status":"completed|blocked","summary":"...","filesChanged":["..."],"verification":[{"command":"...","status":"passed|failed|not-run"}],"scopeChanges":["..."],"blocker":"optional"}. Report formatting is not a separate task: if the marker cannot be produced, return the substantive result once and stop.`
+const REVIEW_REPORT_CONTRACT = `\n\n## Review Execution Contract\nThis is a milestone gate, not a per-commit review. Review only correctness, security, behavioral regressions, acceptance coverage, and meaningful missing tests. Do not report style or issues already enforced by lint, types, or tests. Return no more than {MAX_FINDINGS} findings. Every finding needs severity, concrete evidence, and an actionable verification. End with exactly one <flow-review> JSON object: {"verdict":"pass|changes-requested|blocked","summary":"...","findings":[{"severity":"critical|high|medium|low","title":"...","evidence":"...","file":"optional","line":1,"verification":"optional"}]}.`
 
 function deterministicSample(value: string, rate: number): boolean {
   let hash = 2166136261
@@ -38,16 +68,28 @@ function normalizeMessage(message: RawMessage) {
     modelID: message.modelID,
     variant: message.variant,
     costUsd: message.cost,
-    tokens: tokens ? {
-      input: tokens.input ?? 0,
-      output: tokens.output ?? 0,
-      reasoning: tokens.reasoning ?? 0,
-      cacheRead: tokens.cacheRead ?? tokens.cache_read ?? 0,
-      cacheWrite: tokens.cacheWrite ?? tokens.cache_write ?? 0,
-    } : undefined,
+    tokens: tokens
+      ? {
+          input: tokens.input ?? 0,
+          output: tokens.output ?? 0,
+          reasoning: tokens.reasoning ?? 0,
+          cacheRead: tokens.cacheRead ?? tokens.cache_read ?? 0,
+          cacheWrite: tokens.cacheWrite ?? tokens.cache_write ?? 0,
+        }
+      : undefined,
     createdAt: message.time?.created,
     completedAt: message.time?.completed,
+    error: message.error !== undefined,
   }
+}
+
+function errorText(value: unknown): string | undefined {
+  if (typeof value === "string") return value
+  if (typeof value !== "object" || value === null) return undefined
+  const error = value as { message?: unknown; data?: { message?: unknown }; name?: unknown }
+  const message = typeof error.data?.message === "string" ? error.data.message : typeof error.message === "string" ? error.message : undefined
+  const name = typeof error.name === "string" ? error.name : undefined
+  return [name, message].filter(Boolean).join(": ") || JSON.stringify(value)
 }
 
 function verificationCategory(command: string): VerificationEvidence["category"] | undefined {
@@ -60,16 +102,32 @@ function verificationCategory(command: string): VerificationEvidence["category"]
   return undefined
 }
 
+function stringValues(value: unknown): string[] {
+  if (typeof value === "string") return [value]
+  if (Array.isArray(value)) return value.flatMap(stringValues)
+  if (typeof value === "object" && value !== null) return Object.values(value).flatMap(stringValues)
+  return []
+}
+
 function pathProtected(value: unknown, patterns: string[]): string | undefined {
-  const text = JSON.stringify(value).replaceAll("\\", "/").toLowerCase()
-  return patterns.find((pattern) => text.includes(pattern.toLowerCase().replaceAll("**/", "").replaceAll("/**", "").replaceAll("*", "")))
+  const values = stringValues(value).map((item) => item.replaceAll("\\", "/").toLowerCase())
+  return patterns.find((pattern) => {
+    const literal = pattern.toLowerCase().replaceAll("**/", "").replaceAll("/**", "").replaceAll("*", "")
+    const escaped = literal.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+    const suffix = literal === ".env" ? "(?:\\.[a-z0-9_-]+)?" : ""
+    const matcher = new RegExp(`(?:^|[/\\s'\"=])${escaped}${suffix}(?=$|[/\\s'\".,:;])`, "i")
+    return values.some((item) => matcher.test(item))
+  })
 }
 
 function missingPacketHeadings(description: string, headings: string[]): string[] {
   return headings.filter((heading) => !new RegExp(`(?:^|\\n)\\s{0,3}(?:#+\\s*)?(?:\\*\\*)?${heading}(?:\\*\\*)?\\s*:?(?:\\s*\\n|\\s+\\S)`, "im").test(description))
 }
 
-function parseWorkReport(output: string): { report?: WorkReport; error?: string } {
+function parseWorkReport(output: string): {
+  report?: WorkReport
+  error?: string
+} {
   const match = output.match(/<flow-work-report>\s*([\s\S]*?)\s*<\/flow-work-report>/)
   if (!match) return { error: "missing <flow-work-report>" }
   try {
@@ -77,22 +135,115 @@ function parseWorkReport(output: string): { report?: WorkReport; error?: string 
     const validStatus = value.status === "completed" || value.status === "blocked"
     const validFiles = Array.isArray(value.filesChanged) && value.filesChanged.every((item) => typeof item === "string")
     const validScope = Array.isArray(value.scopeChanges) && value.scopeChanges.every((item) => typeof item === "string")
-    const validVerification = Array.isArray(value.verification) && value.verification.every((item) => typeof item === "object" && item !== null && typeof item.command === "string" && (item.status === "passed" || item.status === "failed" || item.status === "not-run"))
-    if (!validStatus || typeof value.summary !== "string" || !validFiles || !validScope || !validVerification || (value.blocker !== undefined && typeof value.blocker !== "string")) return { error: "invalid <flow-work-report> schema" }
-    return { report: { status: value.status as WorkReport["status"], summary: value.summary, filesChanged: value.filesChanged as string[], verification: value.verification as WorkReport["verification"], scopeChanges: value.scopeChanges as string[], blocker: value.blocker } }
+    const validVerification =
+      Array.isArray(value.verification) &&
+      value.verification.every(
+        (item) => typeof item === "object" && item !== null && typeof item.command === "string" && (item.status === "passed" || item.status === "failed" || item.status === "not-run"),
+      )
+    if (!validStatus || typeof value.summary !== "string" || !validFiles || !validScope || !validVerification || (value.blocker !== undefined && typeof value.blocker !== "string"))
+      return { error: "invalid <flow-work-report> schema" }
+    return {
+      report: {
+        status: value.status as WorkReport["status"],
+        summary: value.summary,
+        filesChanged: value.filesChanged as string[],
+        verification: value.verification as WorkReport["verification"],
+        scopeChanges: value.scopeChanges as string[],
+        blocker: value.blocker,
+      },
+    }
   } catch {
     return { error: "invalid JSON in <flow-work-report>" }
   }
+}
+
+function parseReviewReport(output: string, maximumFindings: number): { report?: ReviewReport; error?: string } {
+  const match = output.match(/<flow-review>\s*([\s\S]*?)\s*<\/flow-review>/)
+  if (!match) return { error: "missing <flow-review>" }
+  try {
+    const value = JSON.parse(match[1]) as Partial<ReviewReport>
+    const validVerdict = value.verdict === "pass" || value.verdict === "changes-requested" || value.verdict === "blocked"
+    const findings = value.findings
+    const validFindings =
+      Array.isArray(findings) &&
+      findings.length <= maximumFindings &&
+      findings.every((finding) => {
+        if (typeof finding !== "object" || finding === null) return false
+        return (
+          ["critical", "high", "medium", "low"].includes(finding.severity) &&
+          typeof finding.title === "string" &&
+          typeof finding.evidence === "string" &&
+          (finding.file === undefined || typeof finding.file === "string") &&
+          (finding.line === undefined || (Number.isInteger(finding.line) && finding.line > 0)) &&
+          (finding.verification === undefined || typeof finding.verification === "string")
+        )
+      })
+    if (!validVerdict || typeof value.summary !== "string" || !validFindings) return { error: "invalid <flow-review> schema" }
+    if (value.verdict === "pass" && findings!.length > 0) return { error: "passing <flow-review> cannot contain findings" }
+    if (value.verdict !== "pass" && findings!.length === 0) return { error: "non-passing <flow-review> requires findings" }
+    return { report: value as ReviewReport }
+  } catch {
+    return { error: "invalid JSON in <flow-review>" }
+  }
+}
+
+function packetField(description: string, heading: string): string | undefined {
+  const match = description.match(new RegExp(`(?:^|\\n)\\s{0,3}(?:#+\\s*)?(?:\\*\\*)?${heading}(?:\\*\\*)?\\s*:?\\s*([^\\n]+)`, "i"))
+  return match?.[1]?.trim()
+}
+
+function stableTaskID(description: string): string {
+  const explicit = packetField(description, "Task ID")
+  if (explicit)
+    return explicit
+      .toLowerCase()
+      .replace(/[^a-z0-9._-]+/g, "-")
+      .slice(0, 100)
+  const objective = packetField(description, "Objective") ?? description.split("## Worker Execution Contract", 1)[0]
+  const normalized = objective
+    .toLowerCase()
+    .replace(/\b(return|fix|correct)\s+(the\s+)?(json|xml|work\s+report|report\s+schema|report\s+format)\b/g, "report-output")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+  let hash = 2166136261
+  for (const character of normalized) hash = Math.imul(hash ^ character.charCodeAt(0), 16777619)
+  return `task-${(hash >>> 0).toString(16)}`
+}
+
+function uniqueByID<T extends { id: string }>(items: T[]): T[] {
+  return [...new Map(items.map((item) => [item.id, item])).values()]
 }
 
 function parseEvaluation(output: string, runID?: string, sessionID?: string): QualityEvidence | undefined {
   const match = output.match(/<flow-evaluation>\s*([\s\S]*?)\s*<\/flow-evaluation>/)
   if (!match) return undefined
   try {
-    const value = JSON.parse(match[1]) as { source?: QualityEvidence["source"]; verdict?: QualityEvidence["verdict"]; score?: number; note?: string }
-    if (!value.source || !value.verdict || !["cheap-review", "audit-review", "shadow-plan", "shadow-implementation"].includes(value.source) || !["good", "mixed", "bad", "unknown"].includes(value.verdict)) return undefined
-    return { id: crypto.randomUUID(), runID, sessionID, source: value.source, verdict: value.verdict, score: value.score, note: value.note?.slice(0, 2_000), observedAt: Date.now() }
-  } catch { return undefined }
+    const value = JSON.parse(match[1]) as {
+      source?: QualityEvidence["source"]
+      verdict?: QualityEvidence["verdict"]
+      score?: number
+      note?: string
+    }
+    if (
+      !value.source ||
+      !value.verdict ||
+      !["cheap-review", "audit-review", "shadow-plan", "shadow-implementation"].includes(value.source) ||
+      !["good", "mixed", "bad", "unknown"].includes(value.verdict)
+    )
+      return undefined
+    return {
+      id: crypto.randomUUID(),
+      runID,
+      sessionID,
+      source: value.source,
+      verdict: value.verdict,
+      score: value.score,
+      note: value.note?.slice(0, 2_000),
+      observedAt: Date.now(),
+    }
+  } catch {
+    return undefined
+  }
 }
 
 function developerDefaults(options: PluginOptions): DeveloperModeSnapshot {
@@ -109,8 +260,14 @@ function developerDefaults(options: PluginOptions): DeveloperModeSnapshot {
 async function loadDeveloperMode(path: string, defaults: DeveloperModeSnapshot): Promise<DeveloperModeSnapshot> {
   try {
     const saved = JSON.parse(await readFile(path, "utf8")) as Partial<DeveloperModeSnapshot>
-    return { ...defaults, ...saved, sampleRate: Math.max(0, Math.min(1, saved.sampleRate ?? defaults.sampleRate)) }
-  } catch { return defaults }
+    return {
+      ...defaults,
+      ...saved,
+      sampleRate: Math.max(0, Math.min(1, saved.sampleRate ?? defaults.sampleRate)),
+    }
+  } catch {
+    return defaults
+  }
 }
 
 async function saveDeveloperMode(path: string, state: DeveloperModeSnapshot): Promise<void> {
@@ -123,11 +280,16 @@ async function saveDeveloperMode(path: string, state: DeveloperModeSnapshot): Pr
 async function loadModelOverrides(path: string): Promise<ModelOverrides> {
   try {
     const value = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>
-    return Object.fromEntries(Object.entries(value).flatMap(([agent, override]) => {
-      if (typeof override !== "object" || override === null || typeof (override as { model?: unknown }).model !== "string") return []
-      const { model, variant } = override as { model: string; variant?: unknown }
-      return [[agent, { model, ...(typeof variant === "string" ? { variant } : {}) }]]
-    }))
+    return Object.fromEntries(
+      Object.entries(value).flatMap(([agent, override]) => {
+        if (typeof override !== "object" || override === null || typeof (override as { model?: unknown }).model !== "string") return []
+        const { model, variant } = override as {
+          model: string
+          variant?: unknown
+        }
+        return [[agent, { model, ...(typeof variant === "string" ? { variant } : {}) }]]
+      }),
+    )
   } catch {
     return {}
   }
@@ -141,12 +303,21 @@ async function saveModelOverrides(path: string, state: ModelOverrides): Promise<
 }
 
 function applyModelOverrides(agents: Record<string, AgentDefinition>, overrides: ModelOverrides): Record<string, AgentDefinition> {
-  return Object.fromEntries(Object.entries(agents).map(([name, definition]) => {
-    const override = overrides[name]
-    if (!override) return [name, definition]
-    const { variant: _variant, ...withoutVariant } = definition
-    return [name, { ...withoutVariant, model: override.model, ...(override.variant ? { variant: override.variant } : {}) }]
-  }))
+  return Object.fromEntries(
+    Object.entries(agents).map(([name, definition]) => {
+      const override = overrides[name]
+      if (!override) return [name, definition]
+      const { variant: _variant, ...withoutVariant } = definition
+      return [
+        name,
+        {
+          ...withoutVariant,
+          model: override.model,
+          ...(override.variant ? { variant: override.variant } : {}),
+        },
+      ]
+    }),
+  )
 }
 
 function evaluatorAgent(baseline: AgentDefinition, instruction: string, source: "audit-review" | "shadow-plan" | "shadow-implementation"): AgentDefinition {
@@ -155,6 +326,7 @@ function evaluatorAgent(baseline: AgentDefinition, instruction: string, source: 
     mode: "subagent",
     model: baseline.model,
     variant: baseline.variant,
+    steps: 12,
     permission: { edit: "deny", bash: "deny", task: "deny" },
     prompt: `${instruction} Do not edit files or run mutating tools. Return concise reasoning followed by exactly one JSON object inside <flow-evaluation> tags. The JSON shape is {"source":"${source}","verdict":"good|mixed|bad|unknown","score":1-5,"note":"brief explanation"}.`,
   }
@@ -165,7 +337,10 @@ export default async function agentFlowsPlugin(input: any, options: PluginOption
   if (!flow) throw new Error(`Unknown OpenCode agent flow: ${options.flow}`)
   const telemetryOptions = options.telemetry ?? {}
   const reportDirectory = expandPath(telemetryOptions.reportDir ?? options.usageReportDir ?? defaultTelemetryDirectory())
-  const store = new TelemetryStore(reportDirectory, { dashboard: telemetryOptions.dashboard, retentionDays: telemetryOptions.retentionDays })
+  const store = new TelemetryStore(reportDirectory, {
+    dashboard: telemetryOptions.dashboard,
+    retentionDays: telemetryOptions.retentionDays,
+  })
   const developerPath = join(reportDirectory, "developer-mode.json")
   const modelOverridesPath = join(reportDirectory, "model-overrides.json")
   let developerMode = await loadDeveloperMode(developerPath, developerDefaults(options))
@@ -175,20 +350,59 @@ export default async function agentFlowsPlugin(input: any, options: PluginOption
   const baseline = configuredAgents[flow.baselineAgent]
   if (baseline) {
     const billingSource = flow.agentMetadata[flow.baselineAgent]?.billingSource ?? "unknown"
-    metadata["flow-audit-reviewer"] = { role: "evaluator", billingSource, risk: "low" }
-    metadata["flow-shadow-planner"] = { role: "evaluator", billingSource, risk: "low" }
-    metadata["flow-shadow-implementer"] = { role: "evaluator", billingSource, risk: "low" }
+    metadata["flow-audit-reviewer"] = {
+      role: "evaluator",
+      billingSource,
+      risk: "low",
+    }
+    metadata["flow-shadow-planner"] = {
+      role: "evaluator",
+      billingSource,
+      risk: "low",
+    }
+    metadata["flow-shadow-implementer"] = {
+      role: "evaluator",
+      billingSource,
+      risk: "low",
+    }
   }
-  let runtimeFlow = { ...flow, agents: configuredAgents, agentMetadata: metadata }
+  let runtimeFlow = {
+    ...flow,
+    agents: configuredAgents,
+    agentMetadata: metadata,
+  }
+  const orchestrationPolicy = {
+    maxTasksPerRun: options.orchestration?.maxTasksPerRun ?? flow.orchestration.maxTasksPerRun,
+    maxConcurrentWorkers: options.orchestration?.maxConcurrentWorkers ?? flow.orchestration.maxConcurrentWorkers,
+  }
+  const reviewerPolicy = flow.reviewer
+    ? {
+        ...flow.reviewer,
+        enabled: options.reviewer?.enabled ?? flow.reviewer.enabled,
+        agent: options.reviewer?.agent ?? flow.reviewer.agent,
+        sampleRate: options.reviewer?.sampleRate ?? flow.reviewer.sampleRate,
+        maxRounds: options.reviewer?.maxRounds ?? flow.reviewer.maxRounds,
+        maxFindings: options.reviewer?.maxFindings ?? flow.reviewer.maxFindings,
+        maxPacketChars: options.reviewer?.maxPacketChars ?? flow.reviewer.maxPacketChars,
+      }
+    : undefined
   const activeRuns = new Map<string, RunState>()
   const sessionAgents = new Map<string, string>()
+  const isolatedSessionRoots = new Map<string, string>()
+  const isolatedSessionDirectories = new Map<string, string>()
+  const isolatedSessionMessages = new Map<string, ReturnType<typeof normalizeMessage>[]>()
   const tasks = new Map<string, TaskTrace>()
   const taskAttempts = new Map<string, number>()
   const verification: VerificationEvidence[] = []
   const quality: QualityEvidence[] = []
   const approvals = new Map<string, Set<string>>()
+  const riftEnabled = options.rift?.enabled === true
+  const rift = new RiftClient(options.rift?.command ?? "rift")
+  const riftRuns = new Map<string, RiftRunState>()
 
   async function resolveRoot(sessionID: string): Promise<SessionInfo | undefined> {
+    const isolatedRoot = isolatedSessionRoots.get(sessionID)
+    if (isolatedRoot) return (await input.client?.session?.get({ path: { id: isolatedRoot } }))?.data as SessionInfo | undefined
     let session = (await input.client?.session?.get({ path: { id: sessionID } }))?.data as SessionInfo | undefined
     while (session?.parentID) session = (await input.client.session.get({ path: { id: session.parentID } })).data as SessionInfo | undefined
     return session
@@ -197,16 +411,48 @@ export default async function agentFlowsPlugin(input: any, options: PluginOption
   async function collectSessions(root: SessionInfo) {
     const sessions: SessionInfo[] = [root]
     for (let index = 0; index < sessions.length; index += 1) {
-      const children = (await input.client.session.children({ path: { id: sessions[index].id } })).data ?? []
+      const children =
+        (
+          await input.client.session.children({
+            path: { id: sessions[index].id },
+          })
+        ).data ?? []
       sessions.push(...children)
     }
-    return Promise.all(sessions.map(async (session) => {
-      const data = (await input.client.session.messages({ path: { id: session.id } })).data ?? []
-      const messages = data.map((item: { info: RawMessage }) => normalizeMessage(item.info))
-      const agent = messages.find((message: { role: string; agent?: string }) => message.role === "user")?.agent ?? sessionAgents.get(session.id)
-      if (agent) sessionAgents.set(session.id, agent)
-      return { id: session.id, parentID: session.parentID, agent, messages }
-    }))
+    for (const [sessionID, rootID] of isolatedSessionRoots) {
+      if (rootID === root.id && !sessions.some((session) => session.id === sessionID)) sessions.push({ id: sessionID, parentID: root.id })
+    }
+    return Promise.all(
+      sessions.map(async (session) => {
+        const isolatedMessages = isolatedSessionMessages.get(session.id)
+        if (isolatedMessages) return { id: session.id, parentID: session.parentID, agent: sessionAgents.get(session.id), messages: isolatedMessages }
+        const directory = isolatedSessionDirectories.get(session.id)
+        const data = (await input.client.session.messages({ path: { id: session.id }, ...(directory ? { query: { directory } } : {}) })).data ?? []
+        const messages = data.map((item: { info: RawMessage }) => normalizeMessage(item.info))
+        const agent = messages.find((message: { role: string; agent?: string }) => message.role === "user")?.agent ?? sessionAgents.get(session.id)
+        if (agent) sessionAgents.set(session.id, agent)
+        return { id: session.id, parentID: session.parentID, agent, messages }
+      }),
+    )
+  }
+
+  async function correlatedTaskError(task: TaskTrace): Promise<string | undefined> {
+    if (!input.client?.session) return undefined
+    try {
+      const children = (await input.client.session.children({ path: { id: task.sessionID } })).data ?? []
+      const errors: string[] = []
+      for (const child of children) {
+        const messages = (await input.client.session.messages({ path: { id: child.id } })).data ?? []
+        for (const item of messages as Array<{ info: RawMessage }>) {
+          if ((item.info.time?.created ?? 0) < task.startedAt || item.info.error === undefined) continue
+          const message = errorText(item.info.error)
+          if (message && !errors.includes(message)) errors.push(message)
+        }
+      }
+      return errors.slice(0, 3).join("; ") || undefined
+    } catch {
+      return undefined
+    }
   }
 
   async function quotas() {
@@ -226,24 +472,58 @@ export default async function agentFlowsPlugin(input: any, options: PluginOption
       const sessions = await collectSessions(root)
       if (sessions[0]?.agent !== flow.defaultAgent) return
       const shared = {
-        flow: runtimeFlow, rootSessionID, sessions, tasks: [...tasks.values()], verification, quality,
-        quotas: await quotas(), displacementEfficiency: telemetryOptions.displacementEfficiency ?? options.displacementEfficiency ?? 0.75,
-        pricing: normalizePricing(telemetryOptions.apiEquivalentPricing), developerMode,
+        flow: runtimeFlow,
+        rootSessionID,
+        sessions,
+        tasks: [...tasks.values()],
+        verification,
+        quality,
+        quotas: await quotas(),
+        displacementEfficiency: telemetryOptions.displacementEfficiency ?? options.displacementEfficiency ?? 0.75,
+        pricing: normalizePricing(telemetryOptions.apiEquivalentPricing),
+        developerMode,
       }
-      const runReport = buildFlowReport({ ...shared, runID: run.id, startedAt: run.startedAt })
+      const runReport = buildFlowReport({
+        ...shared,
+        runID: run.id,
+        startedAt: run.startedAt,
+      })
       const historical = (await store.listRuns()).filter((item) => item.runID !== runReport.runID || item.rootSessionID !== runReport.rootSessionID)
       const budget = commandCodeBudget([...historical, runReport], options.quota?.commandCodeMonthlyCreditsUsd)
       runReport.quotas = [...runReport.quotas.filter((item) => item.source !== "commandcode-local-budget"), budget]
       await store.writeReport(runReport)
-      await store.writeReport(buildFlowReport(shared))
-      if (telemetryOptions.runSummaryToast ?? options.usageToast ?? true) await input.client.tui?.showToast({ body: { title: `${flow.title}: run complete`, message: `${runReport.totals.subagentsSpawned} subagents | $${runReport.totals.costUsd.toFixed(4)} metered | $${runReport.totals.apiEquivalentCostUsd.toFixed(4)} API-equivalent`, variant: runReport.totals.taskFailures > 0 ? "warning" : "info", duration: 8_000 } })
-    } catch (error) { console.warn("Failed to finalize agent flow telemetry", error) }
+      const sessionRuns = [...historical.filter((item) => item.rootSessionID === rootSessionID), runReport]
+      await store.writeReport(buildFlowReport({
+        ...shared,
+        tasks: uniqueByID(sessionRuns.flatMap((item) => item.tasks)),
+        verification: uniqueByID(sessionRuns.flatMap((item) => item.verification)),
+        quality: uniqueByID(sessionRuns.flatMap((item) => item.quality)),
+      }))
+      if (telemetryOptions.runSummaryToast ?? options.usageToast ?? true)
+        await input.client.tui?.showToast({
+          body: {
+            title: `${flow.title}: run complete`,
+            message: `${runReport.totals.subagentsSpawned} subagents | $${runReport.totals.costUsd.toFixed(4)} metered | $${runReport.totals.apiEquivalentCostUsd.toFixed(4)} API-equivalent`,
+            variant: runReport.totals.taskFailures > 0 ? "warning" : "info",
+            duration: 8_000,
+          },
+        })
+      for (const [sessionID, rootID] of isolatedSessionRoots) {
+        if (rootID !== rootSessionID) continue
+        isolatedSessionRoots.delete(sessionID)
+        isolatedSessionDirectories.delete(sessionID)
+        isolatedSessionMessages.delete(sessionID)
+      }
+    } catch (error) {
+      console.warn("Failed to finalize agent flow telemetry", error)
+    }
   }
 
   function developerInstructions(sessionID: string): string[] {
     if (!developerMode.enabled) return []
     const run = activeRuns.get(sessionID)
-    if (!deterministicSample(`${flow.id}:${run?.id ?? sessionID}:${options.developer?.sampleSalt ?? "default"}`, developerMode.sampleRate)) return ["Developer evaluation mode is enabled, but this run was not selected by its sampling rate."]
+    if (!deterministicSample(`${flow.id}:${run?.id ?? sessionID}:${options.developer?.sampleSalt ?? "default"}`, developerMode.sampleRate))
+      return ["Developer evaluation mode is enabled, but this run was not selected by its sampling rate."]
     const instructions = ["Developer evaluation mode selected this run. Evaluators must not modify production files."]
     if (developerMode.shadowPlanning) instructions.push("Before implementation, delegate a read-only independent plan to flow-shadow-planner and preserve its <flow-evaluation> JSON marker.")
     if (developerMode.shadowImplementation) instructions.push("Before implementation, request a read-only patch proposal from flow-shadow-implementer and preserve its <flow-evaluation> JSON marker.")
@@ -251,52 +531,341 @@ export default async function agentFlowsPlugin(input: any, options: PluginOption
     return instructions
   }
 
+  function reviewerInstructions(sessionID: string): string[] {
+    if (!reviewerPolicy?.enabled) return ["Automatic milestone review is disabled for this flow."]
+    const run = activeRuns.get(sessionID)
+    const sampled = deterministicSample(`${flow.id}:${run?.id ?? sessionID}:review`, reviewerPolicy.sampleRate)
+    return [
+      `Milestone review policy: maximum ${reviewerPolicy.maxRounds} round(s), maximum ${reviewerPolicy.maxFindings} findings per round, and never one review per commit.`,
+      sampled
+        ? "This run was selected for sampled review if it produces a substantial self-contained changeset."
+        : "This run was not selected for sampled review; explicit requests, final handoff milestones, and self-contained high-risk units still qualify.",
+    ]
+  }
+
+  function riftInstructions(): string[] {
+    if (!riftEnabled) return []
+    return [
+      "Rift isolation is enabled. Before parallel writer tasks, call flow_rift_begin once, dispatch independent flow_rift_task calls concurrently, then call flow_rift_integrate with the completed stable Task IDs. Never use ordinary task calls for concurrent writers. Rift integration refuses undeclared files, worker conflicts, and source files changed after the session baseline.",
+    ]
+  }
+
   const developerTool = tool({
     description: "View or update persistent developer evaluation mode without editing opencode.json. Changes apply to the next root request.",
-    args: { enabled: tool.schema.boolean().optional(), auditReview: tool.schema.boolean().optional(), shadowPlanning: tool.schema.boolean().optional(), shadowImplementation: tool.schema.boolean().optional(), sampleRate: tool.schema.number().min(0).max(1).optional(), reset: tool.schema.boolean().optional() },
+    args: {
+      enabled: tool.schema.boolean().optional(),
+      auditReview: tool.schema.boolean().optional(),
+      shadowPlanning: tool.schema.boolean().optional(),
+      shadowImplementation: tool.schema.boolean().optional(),
+      sampleRate: tool.schema.number().min(0).max(1).optional(),
+      reset: tool.schema.boolean().optional(),
+    },
     async execute(args) {
-      developerMode = args.reset ? developerDefaults(options) : { ...developerMode, ...Object.fromEntries(Object.entries(args).filter(([key, value]) => key !== "reset" && value !== undefined)) }
+      developerMode = args.reset
+        ? developerDefaults(options)
+        : {
+            ...developerMode,
+            ...Object.fromEntries(Object.entries(args).filter(([key, value]) => key !== "reset" && value !== undefined)),
+          }
       await saveDeveloperMode(developerPath, developerMode)
       return `Developer mode: ${developerMode.enabled ? "enabled" : "disabled"}; audit=${developerMode.auditReview}; shadow plan=${developerMode.shadowPlanning}; shadow implementation=${developerMode.shadowImplementation}; sample rate=${developerMode.sampleRate}. Saved at ${developerPath}; no opencode.json edit or restart is needed.`
     },
   })
 
   function modelSummary(): string {
-    return Object.entries(configuredAgents).map(([name, agent]) => {
-      const shipped = flow.agents[name]
-      const override = modelOverrides[name]
-      const suffix = override ? ` override; default ${shipped.model}${shipped.variant ? ` (${shipped.variant})` : ""}` : " default"
-      return `- ${name}: ${agent.model}${agent.variant ? ` (${agent.variant})` : ""}${suffix}`
-    }).join("\n")
+    return Object.entries(configuredAgents)
+      .map(([name, agent]) => {
+        const shipped = flow.agents[name]
+        const override = modelOverrides[name]
+        const suffix = override ? ` override; default ${shipped.model}${shipped.variant ? ` (${shipped.variant})` : ""}` : " default"
+        return `- ${name}: ${agent.model}${agent.variant ? ` (${agent.variant})` : ""}${suffix}`
+      })
+      .join("\n")
   }
 
   const modelsTool = tool({
     description: "List persistent flow-agent model mappings, or set/reset one mapping. Changes apply after restarting OpenCode.",
-    args: { agent: tool.schema.string().optional(), model: tool.schema.string().optional(), variant: tool.schema.string().optional(), reset: tool.schema.boolean().optional() },
+    args: {
+      agent: tool.schema.string().optional(),
+      model: tool.schema.string().optional(),
+      variant: tool.schema.string().optional(),
+      reset: tool.schema.boolean().optional(),
+    },
     async execute(args) {
       if (!args.agent) return `Flow models:\n${modelSummary()}\n\nUse flow_models with agent and model to save an override. Changes apply after restarting OpenCode.`
       if (!flow.agents[args.agent]) throw new Error(`Unknown flow agent: ${args.agent}. Available agents: ${Object.keys(flow.agents).join(", ")}`)
       if (args.reset) {
         delete modelOverrides[args.agent]
         configuredAgents = applyModelOverrides(flow.agents, modelOverrides)
-        runtimeFlow = { ...flow, agents: configuredAgents, agentMetadata: metadata }
+        runtimeFlow = {
+          ...flow,
+          agents: configuredAgents,
+          agentMetadata: metadata,
+        }
         await saveModelOverrides(modelOverridesPath, modelOverrides)
         return `Reset ${args.agent} to ${configuredAgents[args.agent].model}${configuredAgents[args.agent].variant ? ` (${configuredAgents[args.agent].variant})` : ""}. Restart OpenCode to apply it.`
       }
       if (!args.model) throw new Error("model is required unless reset is true")
       if (!/^[^/\s]+\/[^/\s]+$/.test(args.model)) throw new Error("model must use provider/model format, for example commandcode/laguna-s-2.1-free")
-      modelOverrides[args.agent] = { model: args.model, ...(args.variant ? { variant: args.variant } : {}) }
+      modelOverrides[args.agent] = {
+        model: args.model,
+        ...(args.variant ? { variant: args.variant } : {}),
+      }
       configuredAgents = applyModelOverrides(flow.agents, modelOverrides)
-      runtimeFlow = { ...flow, agents: configuredAgents, agentMetadata: metadata }
+      runtimeFlow = {
+        ...flow,
+        agents: configuredAgents,
+        agentMetadata: metadata,
+      }
       await saveModelOverrides(modelOverridesPath, modelOverrides)
       return `Saved ${args.agent}: ${args.model}${args.variant ? ` (${args.variant})` : ""}. The variant is cleared when omitted. Restart OpenCode to apply this override.`
     },
   })
 
-  const statusTool = tool({ description: "Show agent-flow telemetry for the latest run, current session, or all recorded runs.", args: { scope: tool.schema.enum(["run", "session", "global"]).default("run") }, async execute(args, context) { if (args.scope === "global") return globalReportMarkdown(await store.global()); const root = await resolveRoot(context.sessionID); if (!root) return "Could not resolve the current root session."; const report = args.scope === "run" ? await store.latestRunForSession(root.id) : await store.session(root.id); return report ? flowReportMarkdown(report) : `No completed ${args.scope} report is available yet.` } })
-  const dashboardTool = tool({ description: "Return the cross-client HTML dashboard and report locations for agent-flow telemetry.", args: {}, async execute() { await store.rebuildGlobal(); return `Dashboard: file://${reportDirectory}/dashboard.html\nLatest run: ${reportDirectory}/latest-run.md\nGlobal report: ${reportDirectory}/global.md\nDeveloper controls: flow_developer_mode`; } })
-  const feedbackTool = tool({ description: "Record explicit user feedback for the latest completed agent-flow run.", args: { rating: tool.schema.enum(["good", "mixed", "bad"]), note: tool.schema.string().max(2_000).optional() }, async execute(args, context) { const root = await resolveRoot(context.sessionID); if (!root) throw new Error("Could not resolve the current root session"); await store.appendFeedback(root.id, { id: crypto.randomUUID(), sessionID: root.id, source: "feedback", verdict: args.rating, note: args.note, observedAt: Date.now() }); return `Recorded ${args.rating} feedback for the latest completed run.` } })
-  const approvalTool = tool({ description: "Request a hard permission prompt before using an approval-gated escalation agent.", args: { agent: tool.schema.string() }, async execute(args, context) { if (!flow.agentMetadata[args.agent]?.requiresApproval && !options.guardrails?.approvalAgents?.includes(args.agent)) return `${args.agent} does not require plugin approval.`; await context.ask({ permission: "flow_escalation", patterns: [args.agent], always: [], metadata: { agent: args.agent, flow: flow.id } }); const root = await resolveRoot(context.sessionID); if (!root) throw new Error("Could not resolve the root session"); const approved = approvals.get(root.id) ?? new Set<string>(); approved.add(args.agent); approvals.set(root.id, approved); return `Approved one use of ${args.agent} for this root session.` } })
+  const statusTool = tool({
+    description: "Show agent-flow telemetry for the latest run, current session, or all recorded runs.",
+    args: {
+      scope: tool.schema.enum(["run", "session", "global"]).default("run"),
+    },
+    async execute(args, context) {
+      if (args.scope === "global") return globalReportMarkdown(await store.global())
+      const root = await resolveRoot(context.sessionID)
+      if (!root) return "Could not resolve the current root session."
+      const report = args.scope === "run" ? await store.latestRunForSession(root.id) : await store.session(root.id)
+      return report ? flowReportMarkdown(report) : `No completed ${args.scope} report is available yet.`
+    },
+  })
+  const dashboardTool = tool({
+    description: "Return the cross-client HTML dashboard and report locations for agent-flow telemetry.",
+    args: {},
+    async execute() {
+      await store.rebuildGlobal()
+      return `Dashboard: file://${reportDirectory}/dashboard.html\nLatest run: ${reportDirectory}/latest-run.md\nGlobal report: ${reportDirectory}/global.md\nDeveloper controls: flow_developer_mode`
+    },
+  })
+  const feedbackTool = tool({
+    description: "Record explicit user feedback for the latest completed agent-flow run.",
+    args: {
+      rating: tool.schema.enum(["good", "mixed", "bad"]),
+      note: tool.schema.string().max(2_000).optional(),
+    },
+    async execute(args, context) {
+      const root = await resolveRoot(context.sessionID)
+      if (!root) throw new Error("Could not resolve the current root session")
+      await store.appendFeedback(root.id, {
+        id: crypto.randomUUID(),
+        sessionID: root.id,
+        source: "feedback",
+        verdict: args.rating,
+        note: args.note,
+        observedAt: Date.now(),
+      })
+      return `Recorded ${args.rating} feedback for the latest completed run.`
+    },
+  })
+  const approvalTool = tool({
+    description: "Request a hard permission prompt before using an approval-gated escalation agent.",
+    args: { agent: tool.schema.string() },
+    async execute(args, context) {
+      if (!flow.agentMetadata[args.agent]?.requiresApproval && !options.guardrails?.approvalAgents?.includes(args.agent)) return `${args.agent} does not require plugin approval.`
+      await context.ask({
+        permission: "flow_escalation",
+        patterns: [args.agent],
+        always: [],
+        metadata: { agent: args.agent, flow: flow.id },
+      })
+      const root = await resolveRoot(context.sessionID)
+      if (!root) throw new Error("Could not resolve the root session")
+      const approved = approvals.get(root.id) ?? new Set<string>()
+      approved.add(args.agent)
+      approvals.set(root.id, approved)
+      return `Approved one use of ${args.agent} for this root session.`
+    },
+  })
+
+  const riftStatusTool = tool({
+    description: "Check whether the opt-in Rift isolation backend is enabled and available for this workspace.",
+    args: {},
+    async execute(_args, context) {
+      if (!riftEnabled) return "Rift isolation is disabled. Set rift.enabled to true in the plugin options to enable it."
+      try {
+        return `Rift isolation is enabled: ${(await rift.version(context.directory)) || "version unknown"}. Workspace initialization is checked when flow_rift_begin runs.`
+      } catch (error) {
+        return `Rift isolation is enabled but unavailable: ${error instanceof Error ? error.message : String(error)}`
+      }
+    },
+  })
+
+  const riftInitTool = tool({
+    description: "Initialize the current repository for Rift after an explicit permission prompt. This can convert a btrfs directory into a subvolume.",
+    args: {},
+    async execute(_args, context) {
+      if (!riftEnabled) throw new Error("Rift isolation is disabled")
+      await context.ask({
+        permission: "flow_rift_init",
+        patterns: [context.directory],
+        always: [],
+        metadata: { flow: flow.id, directory: context.directory },
+      })
+      await rift.init(context.directory)
+      return `Initialized Rift at ${context.directory}.`
+    },
+  })
+
+  const riftBeginTool = tool({
+    description: "Create one immutable Rift baseline containing the current staged, unstaged, and untracked workspace state before parallel writers run.",
+    args: {},
+    async execute(_args, context) {
+      if (!riftEnabled) throw new Error("Rift isolation is disabled")
+      const root = await resolveRoot(context.sessionID)
+      const run = root ? activeRuns.get(root.id) : undefined
+      if (!root || !run) throw new Error("Rift isolation requires an active root flow run")
+      const existing = riftRuns.get(root.id)
+      if (existing?.runID === run.id) return `Rift baseline already exists at ${existing.baselinePath}.`
+      if (existing) throw new Error("A Rift baseline from a previous run is still active; integrate it or call flow_rift_cleanup before starting another")
+      try {
+        await readFile(join(context.directory, ".rift"), "utf8")
+      } catch {
+        throw new Error(`Rift root marker not found at ${context.directory}; run flow_rift_init there before creating a baseline`)
+      }
+      const baselinePath = await rift.create(context.directory, `flow-${run.id}-baseline`, false)
+      riftRuns.set(root.id, {
+        runID: run.id,
+        source: context.directory,
+        baselinePath,
+        baseline: await workspaceManifest(baselinePath),
+        workers: new Map(),
+        workspaces: new Set(),
+      })
+      return `Created immutable Rift baseline at ${baselinePath}. Dispatch independent flow_rift_task calls, then integrate their stable Task IDs with flow_rift_integrate.`
+    },
+  })
+
+  const riftTaskTool = tool({
+    description: "Run one routine or bulk worker in a child Rift snapshot. Independent calls may run concurrently after flow_rift_begin.",
+    args: {
+      task_id: tool.schema.string().min(1).max(100),
+      subagent_type: tool.schema.enum(["routine", "bulk"]),
+      description: tool.schema.string().min(1).max(MAX_WORK_PACKET_CHARS),
+    },
+    async execute(args, context) {
+      if (!riftEnabled) throw new Error("Rift isolation is disabled")
+      const root = await resolveRoot(context.sessionID)
+      const state = root ? riftRuns.get(root.id) : undefined
+      if (!root || !state) throw new Error("Call flow_rift_begin before flow_rift_task")
+      const taskID = stableTaskID(`Task ID: ${args.task_id}`)
+      if (state.workers.has(taskID)) throw new Error(`Rift task ${taskID} already completed`)
+      const workspace = await rift.create(state.baselinePath, `${state.runID}-${taskID}`, options.rift?.runHooks === true)
+      state.workspaces.add(workspace)
+      const trace = [...tasks.values()].find((task) => task.runID === activeRuns.get(root.id)?.id && task.taskID === taskID && task.status === "running")
+      if (trace) trace.workspace = workspace
+      let isolatedSessionID: string | undefined
+      try {
+        const session = (
+          await input.client.session.create({
+            query: { directory: workspace },
+            body: { title: `${taskID} (@${args.subagent_type} Rift worker)` },
+          })
+        ).data
+        if (!session?.id) throw new Error("OpenCode did not create a Rift worker session")
+        isolatedSessionID = session.id
+        sessionAgents.set(session.id, args.subagent_type)
+        isolatedSessionRoots.set(session.id, root.id)
+        isolatedSessionDirectories.set(session.id, workspace)
+        const response = (
+          await input.client.session.prompt({
+            query: { directory: workspace },
+            path: { id: session.id },
+            body: {
+              agent: args.subagent_type,
+              parts: [{ type: "text", text: args.description }],
+            },
+          })
+        ).data
+        if (response?.info) isolatedSessionMessages.set(session.id, [normalizeMessage(response.info as RawMessage)])
+        const output = (response?.parts ?? [])
+          .filter((part: { type?: string; text?: string }) => part.type === "text" && typeof part.text === "string")
+          .map((part: { text: string }) => part.text)
+          .join("\n")
+        if (!output.trim()) throw new Error(errorText(response?.info?.error) ?? "Rift worker returned empty output")
+        const report = parseWorkReport(output)
+        if (report.report) {
+          state.workers.set(taskID, {
+            taskID,
+            workspace,
+            manifest: await workspaceManifest(workspace),
+            declaredFiles: report.report.filesChanged,
+          })
+        }
+        return `${output}\n\n[Rift workspace: ${workspace}; Task ID: ${taskID}]`
+      } catch (error) {
+        if (isolatedSessionID) {
+          isolatedSessionRoots.delete(isolatedSessionID)
+          isolatedSessionDirectories.delete(isolatedSessionID)
+          isolatedSessionMessages.delete(isolatedSessionID)
+        }
+        if (!options.rift?.retainWorkspaces) {
+          await rift.remove(workspace).catch(() => undefined)
+          state.workspaces.delete(workspace)
+        }
+        throw error
+      }
+    },
+  })
+
+  const riftIntegrateTool = tool({
+    description: "Centrally integrate completed Rift workers after validating declared files, cross-worker conflicts, and source changes since the baseline.",
+    args: { task_ids: tool.schema.array(tool.schema.string()).min(1) },
+    async execute(args, context) {
+      if (!riftEnabled) throw new Error("Rift isolation is disabled")
+      const root = await resolveRoot(context.sessionID)
+      const state = root ? riftRuns.get(root.id) : undefined
+      if (!root || !state) throw new Error("No active Rift baseline exists")
+      const selected = args.task_ids.map((value) => {
+        const taskID = stableTaskID(`Task ID: ${value}`)
+        const worker = state.workers.get(taskID)
+        if (!worker) throw new Error(`Rift task ${taskID} is not ready for integration`)
+        return worker
+      })
+      const changed = await integrateRiftWorkers({ source: state.source, baseline: state.baseline, workers: selected })
+      const cleanupErrors: string[] = []
+      if (!options.rift?.retainWorkspaces) {
+        for (const worker of selected) {
+          try {
+            await rift.remove(worker.workspace)
+            state.workers.delete(worker.taskID)
+            state.workspaces.delete(worker.workspace)
+          } catch (error) {
+            cleanupErrors.push(`${worker.workspace}: ${error instanceof Error ? error.message : String(error)}`)
+          }
+        }
+        if (state.workers.size === 0) {
+          try {
+            await rift.remove(state.baselinePath)
+            riftRuns.delete(root.id)
+          } catch (error) {
+            cleanupErrors.push(`${state.baselinePath}: ${error instanceof Error ? error.message : String(error)}`)
+          }
+        }
+      }
+      return `Integrated ${selected.length} Rift task(s): ${changed.join(", ") || "no file changes"}. Run deterministic checks on the combined live workspace before milestone review.${cleanupErrors.length > 0 ? ` Cleanup requires attention: ${cleanupErrors.join("; ")}` : ""}`
+    },
+  })
+
+  const riftCleanupTool = tool({
+    description: "Remove the active run's Rift worker snapshots and baseline without integrating them, then garbage-collect Rift trash.",
+    args: {},
+    async execute(_args, context) {
+      const root = await resolveRoot(context.sessionID)
+      const state = root ? riftRuns.get(root.id) : undefined
+      if (!root || !state) return "No active Rift workspaces exist for this run."
+      for (const workspace of state.workspaces) await rift.remove(workspace)
+      await rift.remove(state.baselinePath)
+      await rift.gc(state.source)
+      riftRuns.delete(root.id)
+      return "Removed the active run's Rift workspaces."
+    },
+  })
 
   const hooks: any = {
     config: async (config: OpenCodeConfig) => {
@@ -304,7 +873,11 @@ export default async function agentFlowsPlugin(input: any, options: PluginOption
       for (const [name, definition] of Object.entries(configuredAgents)) {
         if (modelOverrides[name] && config.agent[name]) {
           const { variant: _variant, ...withoutVariant } = config.agent[name] as AgentDefinition
-          config.agent[name] = { ...withoutVariant, model: definition.model, ...(definition.variant ? { variant: definition.variant } : {}) }
+          config.agent[name] = {
+            ...withoutVariant,
+            model: definition.model,
+            ...(definition.variant ? { variant: definition.variant } : {}),
+          }
         } else {
           config.agent[name] ??= definition
         }
@@ -316,18 +889,199 @@ export default async function agentFlowsPlugin(input: any, options: PluginOption
       }
       if (options.setDefault !== false) config.default_agent ??= flow.defaultAgent
     },
-    tool: { flow_status: statusTool, flow_dashboard: dashboardTool, flow_feedback: feedbackTool, flow_approve_escalation: approvalTool, flow_developer_mode: developerTool, flow_models: modelsTool },
-    "chat.message": async (chatInput: { sessionID: string; agent?: string; messageID?: string }, output: { message: RawMessage }) => { if (chatInput.agent) sessionAgents.set(chatInput.sessionID, chatInput.agent); const root = await resolveRoot(chatInput.sessionID); if (!root || root.id !== chatInput.sessionID || chatInput.agent !== flow.defaultAgent) return; activeRuns.set(root.id, { id: chatInput.messageID ?? output.message.id ?? crypto.randomUUID(), rootSessionID: root.id, startedAt: output.message.time?.created ?? Date.now() }) },
-    "experimental.chat.system.transform": async (systemInput: { sessionID?: string }, output: { system: string[] }) => { if (!systemInput.sessionID) return; const root = await resolveRoot(systemInput.sessionID); if (root && root.id === systemInput.sessionID) output.system.push(...developerInstructions(root.id)) },
-    "tool.execute.before": async (toolInput: { tool: string; sessionID: string; callID: string }, output: { args: Record<string, unknown> }) => {
-      const root = await resolveRoot(toolInput.sessionID); const run = root ? activeRuns.get(root.id) : undefined; const agent = sessionAgents.get(toolInput.sessionID); const role = agent ? metadata[agent]?.role : undefined
-      if (role === "evaluator" && ["edit", "write", "apply_patch", "bash", "task"].includes(toolInput.tool)) throw new Error(`Evaluator ${agent} is read-only and cannot use ${toolInput.tool}`)
-      if (toolInput.tool === "task") { const delegated = String(output.args.subagent_type ?? output.args.agent ?? "unknown"); const description = typeof output.args.description === "string" ? output.args.description : undefined; const delegatedRole = metadata[delegated]?.role; if (agent === flow.defaultAgent && delegatedRole === "worker") { if ((description?.length ?? 0) > MAX_WORK_PACKET_CHARS) throw new Error(`routine work packet exceeds the ${MAX_WORK_PACKET_CHARS}-character surface-level planning budget`); if (!description?.includes("## Worker Execution Contract")) output.args.description = `${description}${WORK_REPORT_CONTRACT}` }; if (agent === flow.defaultAgent && delegated === "deep") { const routineBlocked = [...tasks.values()].some((task) => task.runID === run?.id && task.agent === "routine" && (task.status === "failed" || task.workReport?.status === "blocked")); if (!routineBlocked) throw new Error("deep requires a failed or blocked routine attempt in the current run"); if (!description?.includes("## Worker Execution Contract")) output.args.description = `${description}${WORK_REPORT_CONTRACT}` }; const packetDescription = typeof output.args.description === "string" ? output.args.description : description; if (run && (delegatedRole === "worker" || delegatedRole === "bulk-worker")) { const key = `${run.id}:${delegated}:${packetDescription ?? "unknown"}`; const attempt = taskAttempts.get(key) ?? 0; const maximum = options.verification?.maxWorkerAttempts ?? flow.verification.maxWorkerAttempts; if (attempt >= maximum) throw new Error(`${delegated} reached the ${maximum}-attempt limit for this task; escalate or ask the user`); taskAttempts.set(key, attempt + 1) }; if (flow.agentMetadata[delegated]?.requiresApproval && !approvals.get(root?.id ?? "")?.delete(delegated)) throw new Error(`${delegated} requires flow_approve_escalation before delegation`); tasks.set(toolInput.callID, { id: crypto.randomUUID(), callID: toolInput.callID, sessionID: toolInput.sessionID, runID: run?.id, agent: delegated, description: packetDescription, status: "running", startedAt: Date.now(), linkConfidence: "correlated" }) }
-      if ((options.guardrails?.enabled ?? true) && (role === "worker" || role === "bulk-worker")) { const matched = pathProtected(output.args, options.guardrails?.protectedPaths ?? DEFAULT_PROTECTED_PATHS); if (matched) throw new Error(`Protected path policy blocked ${agent}: matched ${matched}`) }
-      if (toolInput.tool === "bash") { const command = String(output.args.command ?? ""); const category = verificationCategory(command); if (category) verification.push({ id: toolInput.callID, runID: run?.id, sessionID: toolInput.sessionID, command: command.slice(0, 1_000), category, status: "unknown", observedAt: Date.now() }) }
+    tool: {
+      flow_status: statusTool,
+      flow_dashboard: dashboardTool,
+      flow_feedback: feedbackTool,
+      flow_approve_escalation: approvalTool,
+      flow_developer_mode: developerTool,
+      flow_models: modelsTool,
+      flow_rift_status: riftStatusTool,
+      flow_rift_init: riftInitTool,
+      flow_rift_begin: riftBeginTool,
+      flow_rift_task: riftTaskTool,
+      flow_rift_integrate: riftIntegrateTool,
+      flow_rift_cleanup: riftCleanupTool,
     },
-    "tool.execute.after": async (toolInput: { callID: string }, output: { output: string; metadata?: Record<string, unknown> }) => { const task = tasks.get(toolInput.callID); if (task) { if (task.status !== "failed") task.status = "completed"; task.completedAt = Date.now(); if (metadata[task.agent ?? ""]?.role === "worker" || task.agent === "deep") { const result = parseWorkReport(output.output); if (result.report) task.workReport = result.report; else { task.workReportError = result.error; output.output += `\n\n[Flow guardrail: this worker result is incomplete because ${result.error}. Request a corrected work report before accepting or escalating the result.]` } }; const evidence = parseEvaluation(output.output, task.runID, task.sessionID); if (evidence) quality.push(evidence) }; const check = verification.find((item) => item.id === toolInput.callID); if (check) { if (check.status !== "failed") check.status = "passed"; if (typeof output.metadata?.duration === "number") check.durationMs = output.metadata.duration } },
-    event: async ({ event }: any) => { const part = event.properties?.part; if (event.type === "message.part.updated" && part?.type === "tool" && part.callID && part.state?.status === "error") { const task = tasks.get(part.callID); if (task) { task.status = "failed"; task.completedAt = part.state.time?.end ?? Date.now() }; const check = verification.find((item) => item.id === part.callID); if (check) check.status = "failed" }; const idle = event.type === "session.idle" || (event.type === "session.status" && event.properties?.status?.type === "idle"); if (!idle || !event.properties?.sessionID) return; const root = await resolveRoot(event.properties.sessionID); if (root && root.id === event.properties.sessionID) await finalizeRun(root.id) },
+    "chat.message": async (chatInput: { sessionID: string; agent?: string; messageID?: string }, output: { message: RawMessage }) => {
+      if (chatInput.agent) sessionAgents.set(chatInput.sessionID, chatInput.agent)
+      const root = await resolveRoot(chatInput.sessionID)
+      if (!root || root.id !== chatInput.sessionID || chatInput.agent !== flow.defaultAgent) return
+      activeRuns.set(root.id, {
+        id: chatInput.messageID ?? output.message.id ?? crypto.randomUUID(),
+        rootSessionID: root.id,
+        startedAt: output.message.time?.created ?? Date.now(),
+      })
+    },
+    "experimental.chat.system.transform": async (systemInput: { sessionID?: string }, output: { system: string[] }) => {
+      if (!systemInput.sessionID) return
+      const root = await resolveRoot(systemInput.sessionID)
+      if (root && root.id === systemInput.sessionID) output.system.push(...developerInstructions(root.id), ...reviewerInstructions(root.id), ...riftInstructions())
+    },
+    "tool.execute.before": async (toolInput: { tool: string; sessionID: string; callID: string }, output: { args: Record<string, unknown> }) => {
+      const root = await resolveRoot(toolInput.sessionID)
+      const run = root ? activeRuns.get(root.id) : undefined
+      const agent = sessionAgents.get(toolInput.sessionID)
+      const role = agent ? metadata[agent]?.role : undefined
+      if (toolInput.tool.startsWith("flow_rift_") && role !== "orchestrator") throw new Error(`Only the root orchestrator can use ${toolInput.tool}`)
+      if ((role === "evaluator" || role === "reviewer") && ["edit", "write", "apply_patch", "bash", "task"].includes(toolInput.tool))
+        throw new Error(`${role === "reviewer" ? "Reviewer" : "Evaluator"} ${agent} is read-only and cannot use ${toolInput.tool}`)
+      if (toolInput.tool === "task" || toolInput.tool === "flow_rift_task") {
+        const isolated = toolInput.tool === "flow_rift_task"
+        const delegated = String(output.args.subagent_type ?? output.args.agent ?? "unknown")
+        const description = typeof output.args.description === "string" ? output.args.description : ""
+        const delegatedRole = metadata[delegated]?.role
+        const runTasks = [...tasks.values()].filter((task) => task.runID === run?.id)
+        if (run && runTasks.length >= orchestrationPolicy.maxTasksPerRun)
+          throw new Error(`run reached the ${orchestrationPolicy.maxTasksPerRun}-task delegation budget; return a partial result or ask the user`)
+        if (agent === flow.defaultAgent && (delegatedRole === "worker" || delegatedRole === "bulk-worker")) {
+          const runningWorkers = runTasks.filter((task) => task.status === "running" && ["worker", "bulk-worker"].includes(metadata[task.agent ?? ""]?.role ?? "")).length
+          if (riftEnabled && !isolated && runningWorkers > 0)
+            throw new Error("Rift-enabled runs cannot launch concurrent writers through the shared task tool; use flow_rift_task")
+          if (runningWorkers >= orchestrationPolicy.maxConcurrentWorkers)
+            throw new Error(`run reached the ${orchestrationPolicy.maxConcurrentWorkers}-worker concurrency limit; integrate the current frontier first`)
+          if (delegatedRole === "worker" && description.length > MAX_WORK_PACKET_CHARS)
+            throw new Error(`routine work packet exceeds the ${MAX_WORK_PACKET_CHARS}-character surface-level planning budget`)
+          if (!description.includes("## Worker Execution Contract")) output.args.description = `${description}${WORK_REPORT_CONTRACT}`
+        }
+        if (agent === flow.defaultAgent && delegated === "deep") {
+          const routineBlocked = runTasks.some((task) => task.agent === "routine" && ["failed", "blocked"].includes(task.status))
+          if (!routineBlocked) throw new Error("deep requires a failed or blocked routine attempt in the current run")
+          if (!description.includes("## Worker Execution Contract")) output.args.description = `${description}${WORK_REPORT_CONTRACT}`
+        }
+        if (agent === flow.defaultAgent && delegated === reviewerPolicy?.agent) {
+          if (!reviewerPolicy.enabled) throw new Error("milestone review is disabled")
+          if (description.length > reviewerPolicy.maxPacketChars) throw new Error(`review packet exceeds the ${reviewerPolicy.maxPacketChars}-character limit`)
+          const missing = missingPacketHeadings(description, REVIEW_PACKET_HEADINGS)
+          if (missing.length > 0) throw new Error(`review packet is missing headings: ${missing.join(", ")}`)
+          const priorReviews = runTasks.filter((task) => task.agent === reviewerPolicy.agent)
+          if (priorReviews.length >= reviewerPolicy.maxRounds) throw new Error(`review reached the ${reviewerPolicy.maxRounds}-round limit; triage remaining findings and stop`)
+          if (priorReviews.length > 0) {
+            const previous = priorReviews.at(-1)
+            if (previous?.reviewReport?.verdict !== "changes-requested") throw new Error("re-review requires a prior changes-requested verdict")
+            const followupMissing = missingPacketHeadings(description, ["Finding Disposition", "Non-trivial Fixes"])
+            if (followupMissing.length > 0) throw new Error(`second review requires headings: ${followupMissing.join(", ")}`)
+          }
+          if (!description.includes("## Review Execution Contract"))
+            output.args.description = `${description}${REVIEW_REPORT_CONTRACT.replace("{MAX_FINDINGS}", String(reviewerPolicy.maxFindings))}`
+        }
+        const packetDescription = typeof output.args.description === "string" ? output.args.description : description
+        const taskID = isolated ? stableTaskID(`Task ID: ${String(output.args.task_id ?? "unknown")}`) : stableTaskID(description)
+        if (runTasks.some((task) => task.status === "running" && task.agent === delegated && task.taskID === taskID))
+          throw new Error(`task ${taskID} is already running; do not launch duplicate concurrent attempts`)
+        if (run && (delegatedRole === "worker" || delegatedRole === "bulk-worker")) {
+          const key = `${run.id}:${delegated}:${taskID}`
+          const attempt = taskAttempts.get(key) ?? 0
+          const maximum = options.verification?.maxWorkerAttempts ?? flow.verification.maxWorkerAttempts
+          if (attempt >= maximum) throw new Error(`${delegated} reached the ${maximum}-attempt limit for task ${taskID}; escalate or ask the user`)
+          taskAttempts.set(key, attempt + 1)
+        }
+        if (flow.agentMetadata[delegated]?.requiresApproval && !approvals.get(root?.id ?? "")?.delete(delegated)) throw new Error(`${delegated} requires flow_approve_escalation before delegation`)
+        tasks.set(toolInput.callID, {
+          id: crypto.randomUUID(),
+          callID: toolInput.callID,
+          sessionID: toolInput.sessionID,
+          runID: run?.id,
+          taskID,
+          agent: delegated,
+          description: packetDescription,
+          model: runtimeFlow.agents[delegated]?.model,
+          workspace: isolated ? "pending Rift workspace" : undefined,
+          status: "running",
+          startedAt: Date.now(),
+          linkConfidence: "explicit",
+        })
+      }
+      if (
+        (options.guardrails?.enabled ?? true) &&
+        (role === "worker" || role === "bulk-worker") &&
+        ["edit", "write", "apply_patch", "bash"].includes(toolInput.tool)
+      ) {
+        const matched = pathProtected(output.args, options.guardrails?.protectedPaths ?? DEFAULT_PROTECTED_PATHS)
+        if (matched) throw new Error(`Protected path policy blocked ${agent}: matched ${matched}`)
+      }
+      if (toolInput.tool === "bash") {
+        const command = String(output.args.command ?? "")
+        const category = verificationCategory(command)
+        if (category)
+          verification.push({
+            id: toolInput.callID,
+            runID: run?.id,
+            sessionID: toolInput.sessionID,
+            command: command.slice(0, 1_000),
+            category,
+            status: "unknown",
+            observedAt: Date.now(),
+          })
+      }
+    },
+    "tool.execute.after": async (toolInput: { callID: string }, output: { output: string; metadata?: Record<string, unknown> }) => {
+      const task = tasks.get(toolInput.callID)
+      if (task) {
+        if (task.status !== "failed") task.status = "completed"
+        task.completedAt = Date.now()
+        const taskRole = metadata[task.agent ?? ""]?.role
+        if (task.status !== "failed" && output.output.trim() === "") {
+          task.status = "failed"
+          task.error = (await correlatedTaskError(task)) ?? "Task returned empty output"
+          output.output = `[Flow task failure: ${task.error}]`
+        }
+        if (task.status !== "failed" && (taskRole === "worker" || task.agent === "deep")) {
+          const result = parseWorkReport(output.output)
+          if (result.report) {
+            task.workReport = result.report
+            if (result.report.status === "blocked") task.status = "blocked"
+          } else {
+            task.status = "invalid-output"
+            task.workReportError = result.error
+            output.output += `\n\n[Flow guardrail: this worker result has invalid output because ${result.error}. Do not spawn another worker solely to repair formatting. Use the substantive evidence already returned, retry the same stable Task ID only for substantive missing work, or stop.]`
+          }
+        }
+        if (task.status !== "failed" && taskRole === "reviewer") {
+          const result = parseReviewReport(output.output, reviewerPolicy?.maxFindings ?? 5)
+          if (result.report) {
+            task.reviewReport = result.report
+            quality.push({
+              id: crypto.randomUUID(),
+              runID: task.runID,
+              sessionID: task.sessionID,
+              source: "cheap-review",
+              verdict: result.report.verdict === "pass" ? "good" : result.report.verdict === "changes-requested" ? "mixed" : "bad",
+              note: result.report.summary.slice(0, 2_000),
+              observedAt: Date.now(),
+            })
+          } else {
+            task.status = "invalid-output"
+            task.reviewReportError = result.error
+            output.output += `\n\n[Flow guardrail: milestone review has invalid output because ${result.error}. Disclose that review was unavailable and perform one careful diff self-review; do not loop on review formatting.]`
+          }
+        }
+        const evidence = parseEvaluation(output.output, task.runID, task.sessionID)
+        if (evidence) quality.push(evidence)
+      }
+      const check = verification.find((item) => item.id === toolInput.callID)
+      if (check) {
+        if (check.status !== "failed") check.status = "passed"
+        if (typeof output.metadata?.duration === "number") check.durationMs = output.metadata.duration
+      }
+    },
+    event: async ({ event }: any) => {
+      const part = event.properties?.part
+      if (event.type === "message.part.updated" && part?.type === "tool" && part.callID && part.state?.status === "error") {
+        const task = tasks.get(part.callID)
+        if (task) {
+          task.status = "failed"
+          task.error = typeof part.state.error === "string" ? part.state.error : JSON.stringify(part.state.error ?? "tool execution failed")
+          task.completedAt = part.state.time?.end ?? Date.now()
+        }
+        const check = verification.find((item) => item.id === part.callID)
+        if (check) check.status = "failed"
+      }
+      const idle = event.type === "session.idle" || (event.type === "session.status" && event.properties?.status?.type === "idle")
+      if (!idle || !event.properties?.sessionID) return
+      const root = await resolveRoot(event.properties.sessionID)
+      if (root && root.id === event.properties.sessionID) await finalizeRun(root.id)
+    },
   }
   return hooks
 }

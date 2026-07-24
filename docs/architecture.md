@@ -84,6 +84,9 @@ src/telemetry/dashboard.ts
 src/telemetry/quota.ts
   Codex provider quota and local Command Code budget adapters
 
+src/rift.ts
+  Rift CLI lifecycle, workspace manifests, conflict detection, and guarded integration
+
 scripts/generate-docs.ts
   Flow-definition to Markdown/Mermaid generator
 ```
@@ -128,6 +131,20 @@ with the `evaluator` role. Their usage and cost remain visible but are excluded
 from production displacement calculations. Evaluator prompts are read-only and
 must return structured evidence. Evaluation failure cannot fail production
 work.
+
+## Writer Isolation
+
+When Rift is enabled, a run creates one immutable copy-on-write snapshot of the
+live workspace. Parallel workers receive child snapshots of that baseline.
+Their Git repositories and indexes are independent, and inherited dirty state
+is preserved exactly. A central integration pass computes baseline-to-worker
+changes, verifies the worker declared every changed file, rejects overlapping
+outputs, and checks live source hashes before applying anything.
+
+Rift sessions use OpenCode's directory-scoped session API. The integration does
+not depend on shared Git branches or commits. Unsupported filesystems and
+uninitialized repositories fail explicitly; the flow never falls back to
+concurrent writers in the shared checkout.
 
 ## Quota Sources
 

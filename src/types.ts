@@ -12,6 +12,7 @@ export interface AgentDefinition {
   model: string
   variant?: string
   prompt?: string
+  steps?: number
   permission?: Record<string, "allow" | "ask" | "deny" | Record<string, "allow" | "ask" | "deny">>
 }
 
@@ -32,8 +33,16 @@ export interface VerificationPolicy {
 export interface ReviewerPolicy {
   enabled: boolean
   agent: string
-  triggers: Array<"failed-verification" | "missing-verification" | "high-risk" | "sampled">
+  triggers: Array<"explicit" | "milestone" | "high-risk" | "sampled">
   sampleRate: number
+  maxRounds: number
+  maxFindings: number
+  maxPacketChars: number
+}
+
+export interface OrchestrationPolicy {
+  maxTasksPerRun: number
+  maxConcurrentWorkers: number
 }
 
 export interface FlowDefinition {
@@ -47,6 +56,7 @@ export interface FlowDefinition {
   routingRules: string[]
   escalationRules: string[]
   verification: VerificationPolicy
+  orchestration: OrchestrationPolicy
   reviewer?: ReviewerPolicy
   limitations: string[]
 }
@@ -92,6 +102,21 @@ export interface ReviewerOptions {
   enabled?: boolean
   agent?: string
   sampleRate?: number
+  maxRounds?: number
+  maxFindings?: number
+  maxPacketChars?: number
+}
+
+export interface OrchestrationOptions {
+  maxTasksPerRun?: number
+  maxConcurrentWorkers?: number
+}
+
+export interface RiftOptions {
+  enabled?: boolean
+  command?: string
+  runHooks?: boolean
+  retainWorkspaces?: boolean
 }
 
 export interface QuotaOptions {
@@ -113,6 +138,8 @@ export interface PluginOptions {
   developer?: DeveloperModeOptions
   verification?: VerificationOptions
   reviewer?: ReviewerOptions
+  orchestration?: OrchestrationOptions
+  rift?: RiftOptions
   quota?: QuotaOptions
   guardrails?: GuardrailOptions
 
