@@ -24,42 +24,54 @@ flow_discover_models role=bulk            # one role
 flow_discover_models refresh=true         # bypass the 24-hour cache
 ```
 
-**Sources.** Availability comes from OpenCode's own provider list, pricing and
-capabilities from [models.dev](https://models.dev), and quality from
-[Artificial Analysis](https://artificialanalysis.ai).
+**Sources.** Three signals, all keyless:
 
-**Why it needs no API key.** Artificial Analysis's documented API requires an
-account key even on its free tier. Rather than make you get one, quality is read
-from their public models page, which embeds its charts as schema.org `Dataset`
-blocks in `application/ld+json` — public, keyless, and marked
-`isAccessibleForFree`.
+| Signal | Source |
+|---|---|
+| Which models you can actually reach | OpenCode's own provider list |
+| Price, context, capabilities | [models.dev](https://models.dev) |
+| Quality indices | [Artificial Analysis](https://artificialanalysis.ai), via OpenRouter |
+
+**Why it needs no API key.** Artificial Analysis's own API requires an account
+key even on its free tier, and we will not ask you for one. OpenRouter
+republishes the same AA indices in its public models endpoint, so the data
+arrives as plain JSON with no key, no signup, and no scraping.
+
+**Why quality is coding-specific.** That endpoint carries an
+`artificial_analysis.coding_index` alongside the general intelligence index.
+Since every role here writes code, discovery ranks on the coding index and
+records which index a score came from — the two are not comparable, so they are
+never mixed silently.
 
 **How it degrades.** Every source falls back rather than failing:
 
 | Source | Live | Then | Finally |
 |---|---|---|---|
 | Pricing | models.dev | 24-hour cache | Provider-supplied pricing |
-| Quality | Artificial Analysis page | 24-hour cache | Bundled snapshot |
+| Quality | OpenRouter | 24-hour cache | Bundled 116-model snapshot |
 
-So discovery always returns a usable catalog, even offline. The output states
-which quality source was used, and carries the required attribution.
+Discovery always returns a usable catalog, even offline. The output states which
+quality source was used and carries the attribution.
 
 > [!NOTE]
-> The public page lists roughly the top 20 models, so niche models may have no
-> quality score. They still appear, marked `AA n/a`.
+> Roughly 160 models resolve a quality score. Models without one still appear,
+> marked `quality n/a`, and rank on cost alone.
 
-**Matching is exact, on purpose.** A model only receives a quality score when
-its id or display name matches a published label exactly (after normalization).
-Fuzzy matching was removed because every `-mini`, `-lite`, `-haiku`, `-air`, and
-`-nano` derivative contains its flagship's name and would inherit the flagship's
-score — making a cheap small model outrank the real frontier model and
-inverting the very recommendation this exists to produce. A missing score is
+**Matching is exact, on purpose.** A score is applied only when the model id
+matches exactly, after a total normalization that lowercases and unifies `.`
+with `-` (OpenRouter writes `claude-opus-4.8` where models.dev writes
+`claude-opus-4-8`). Models routed as `openrouter/<id>` resolve to the upstream
+id.
+
+Substring matching is deliberately forbidden: every `-mini`, `-lite`, `-haiku`,
+`-air`, and `-nano` derivative contains its flagship's name and would inherit
+the flagship's score, making a cheap small model outrank the real frontier model
+and inverting the recommendation this exists to produce. A missing score is
 safer than a wrong one.
 
 **Models that cannot call tools are excluded from ranking.** Every role
-delegates through tools, so a free embedding or text-to-speech model is
-unusable regardless of price. Without this filter they would top the cost-led
-ranking.
+delegates through tools, so a free embedding or text-to-speech model is unusable
+regardless of price. Without this filter they topped the cost-led ranking.
 
 ### `flow_config`
 

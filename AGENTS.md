@@ -100,8 +100,9 @@ bun run setup    # interactive terminal setup for the orchestration config
 
 - **models.dev** (`https://models.dev/api.json`) supplies pricing and
   capabilities. Costs are USD per 1M tokens.
-- **Artificial Analysis** supplies model quality. Its documented API requires an
-  account key even on the free tier, so we deliberately read the public models
-  page instead, which embeds its charts as schema.org `Dataset` blocks in
-  `application/ld+json`. Keep the attribution, cache aggressively, and keep the
-  bundled snapshot fallback current.
+- **Artificial Analysis** supplies model quality, read via **OpenRouter's**
+  public `/api/v1/models` endpoint (`benchmarks.artificial_analysis`). AA's own
+  API needs an account key even on its free tier, and we never ask users for
+  keys. Prefer `coding_index`; record the scale, because indices are not
+  comparable. That field is public but undocumented, so tolerate its absence and
+  keep the bundled snapshot fallback current. Keep the AA attribution.

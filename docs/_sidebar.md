@@ -2,6 +2,7 @@
 
   - [Overview](/)
   - [Install and configure](CONFIGURATION.md)
+  - [Everything it does](features-index.md)
   - [Feature reference](FEATURES.md)
 
 - Orchestration setup

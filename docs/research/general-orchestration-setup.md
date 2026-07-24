@@ -1,7 +1,13 @@
 # General Orchestration Setup — Design
 
-Status: proposed
+Status: implemented, with one decision superseded
 Date: 2026-07-24
+
+> **Superseded:** this design proposed scraping Artificial Analysis's public
+> page for quality data. The shipped implementation instead reads the same AA
+> indices as keyless JSON from OpenRouter's public models endpoint, which is
+> more robust, covers far more models, and adds a coding-specific index. See
+> [Tools and commands](../tools.md#flow_discover_models).
 
 ## Goal
 

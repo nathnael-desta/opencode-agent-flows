@@ -30,7 +30,8 @@ Check it any time with `/flow-config`.
 1. **Discovers your models.** It calls `flow_discover_models`, which asks
    OpenCode which providers you have authenticated, then enriches each model
    with [models.dev](https://models.dev) pricing and capabilities and
-   [Artificial Analysis](https://artificialanalysis.ai) quality scores.
+   [Artificial Analysis](https://artificialanalysis.ai) coding scores (fetched
+   keyless via OpenRouter — you never need an API key).
 
 2. **Asks how each provider is billed.** This is the important part, because
    paper price is rarely your real cost. See [Effective cost](effective-cost.md).
@@ -145,10 +146,29 @@ failing that the full models.dev catalog — which lists providers you may not b
 able to reach, so it warns you. The in-OpenCode `/flow-setup` command is the
 more accurate path because it sees your live, authenticated provider list.
 
+### Scripted setup
+
+Pass roles as flags to skip the interview entirely — useful for dotfiles, a new
+machine, or CI:
+
+```bash
+bun run setup \
+  --orchestrator openai/gpt-5.6-sol \
+  --routine commandcode/deepseek-v4-pro \
+  --bulk google/gemini-3.6-flash \
+  --billing openai=subscription-flat \
+  --billing google=bundled-credit \
+  --note google="Antigravity credits via Google AI Pro" \
+  --title "My orchestration" --yes
+```
+
+`bun run setup --help` lists every flag.
+
 ## Troubleshooting
 
-**"No orchestration config found."** You selected `"flow": "custom"` before
-saving one. Run `/flow-setup`, or switch back to a built-in flow.
+**"Your configuration could not be loaded."** You selected `"flow": "custom"`
+without a valid config. The plugin falls back to the built-in flow and keeps all
+its tools, so you can fix it in place with `/flow-setup` or `flow_configure`.
 
 **Changes did not take effect.** Model bindings are applied when OpenCode
 starts. Restart it.

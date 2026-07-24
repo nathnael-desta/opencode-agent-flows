@@ -34,14 +34,18 @@ A command you defined always wins.
 OpenCode has no authenticated providers. Add one with `/connect` first, then
 re-run discovery.
 
-**A model shows `AA n/a`.**
-The public Artificial Analysis page lists roughly the top 20 models, so niche
-models have no published index. The model is still usable; it just ranks without
-a quality signal.
+**A model shows `quality n/a`.**
+Roughly 160 models carry a published Artificial Analysis index; the rest have
+none. The model is still usable, it just ranks on cost alone.
 
 **Quality says "bundled snapshot" instead of "live".**
-The Artificial Analysis page was unreachable or its markup changed, so the
-bundled fallback was used. Discovery still works. Try `refresh=true` later.
+OpenRouter's models endpoint was unreachable, so the bundled 116-model snapshot
+was used. Discovery still works. Try `refresh=true` later.
+
+**A note says quality coverage dropped sharply.**
+The field carrying these indices is public but undocumented, so a large drop is
+reported as an early warning that it may have changed shape. Ranking continues
+with whatever resolved.
 
 **Prices look wrong or missing.**
 models.dev was unreachable and provider-supplied pricing was used, or the model
@@ -54,8 +58,9 @@ Without a running OpenCode server and with no providers in `opencode.json`,
 `/flow-setup` inside OpenCode, or pass `--server <url>`, for your real list.
 
 **`bun run setup` exits immediately.**
-It is interactive and requires a TTY. Run it directly in a terminal, not through
-a pipe or CI step.
+The interactive mode requires a TTY. Run it in a real terminal, or use the
+non-interactive form: `bun run setup --orchestrator <model> --routine <model>
+--billing <provider>=<source> --yes`. See `bun run setup --help`.
 
 ## Delegation
 
@@ -84,6 +89,15 @@ self-review. See [Milestone review](review.md).
 Two rounds is the hard maximum.
 
 ## Rift
+
+**`flow_rift_status` says the CLI is not runnable.**
+`rift` is not installed or not on PATH. Install `rift-snapshot`, or set
+`rift.enabled` to false.
+
+**Initialization fails with "does not support Linux copy-on-write reflinks".**
+Your filesystem cannot host Rift. It needs btrfs, a Linux filesystem with native
+reflink support, or APFS. Plain ext4 will not work, and this is not something
+configuration can fix.
 
 **"Rift root marker not found."**
 Run `flow_rift_init` in that directory first. It is permission-gated because it

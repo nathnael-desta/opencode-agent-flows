@@ -159,19 +159,24 @@ models they actually have. See [Choose your models](orchestration-setup.md).
 |---|---|---|
 | Availability | OpenCode's own provider list | yes |
 | Pricing, context, capabilities | [models.dev](https://models.dev) | yes |
-| Quality indices | [Artificial Analysis](https://artificialanalysis.ai) | yes |
+| Quality indices | [Artificial Analysis](https://artificialanalysis.ai), via OpenRouter | yes |
 
-Artificial Analysis's documented API requires an account key even on its free
-tier. To avoid making users obtain one, quality is read from the public models
-page, which embeds its charts as schema.org `Dataset` blocks in
-`application/ld+json` (public and marked `isAccessibleForFree`). Attribution is
-preserved in the output.
+Artificial Analysis's own API requires an account key even on its free tier. To
+avoid making users obtain one, quality comes from OpenRouter's public models
+endpoint, which republishes the same AA indices as plain keyless JSON — and
+includes a coding-specific index the public AA chart does not expose. Roughly
+160 models resolve a score. Attribution is preserved in the output.
+
+Model identity joins exactly rather than fuzzily: ids are normalized only by
+lowercasing and unifying `.` with `-`, and `openrouter/<id>` resolves to the
+upstream id. Substring matching is forbidden, because derivatives would inherit
+their flagship's score.
 
 Every source degrades rather than failing: live, then a 24-hour cache, then a
-bundled quality snapshot or provider-supplied pricing. Discovery always returns
-a usable catalog, including offline. Because the public page lists roughly the
-top 20 models, niche models appear without a quality score rather than being
-hidden.
+bundled 116-model snapshot or provider-supplied pricing. Discovery always
+returns a usable catalog, including offline. Models with no published score
+appear marked `quality n/a` rather than being hidden, and models that cannot
+call tools are excluded from ranking entirely.
 
 ### Effective Cost
 

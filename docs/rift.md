@@ -63,13 +63,32 @@ Malformed worker workspaces are tracked so cleanup cannot leak them.
 > Rift enabled, ordinary `task` calls for concurrent writers are rejected — you
 > get an error, not a quiet race condition.
 
+## Checking your setup
+
+`flow_rift_status` distinguishes the three states that matter:
+
+| State | What it means |
+|---|---|
+| CLI not runnable | `rift` is not installed or not on PATH |
+| Installed, not initialized | The CLI works but this directory is not a Rift workspace — the message quotes the CLI's own reason |
+| Ready | Initialized and usable |
+
+> [!TIP]
+> If initialization fails with *"does not support Linux copy-on-write
+> reflinks"*, your filesystem cannot host Rift. That is a hard requirement, not
+> a configuration issue.
+
 ## Validation status
 
 The lifecycle is covered by tests using a fake CLI plus real filesystem
-manifests and guarded integration behavior.
+manifests and guarded integration behavior. Additional integration tests run
+against the **real** `rift` binary when one is on PATH and skip otherwise; they
+pin the CLI contract (no `--version` flag, `--help` exits 0, `list` exits 1 when
+uninitialized, `init` fails loudly on an unsupported filesystem).
 
-**Real Rift execution has not been validated on the development host**, which
-runs ext4 without `rift` installed. Proving it on btrfs, XFS with reflinks, or
-APFS remains an operational step — see the Rift section of
+**Copy-on-write itself has still not been proven on a supported filesystem.**
+The development host runs ext4 without reflink support, where `rift init`
+correctly refuses to initialize. Proving real isolation on btrfs, XFS with
+reflinks, or APFS remains an operational step — see the Rift section of
 [Manual testing](MANUAL-TESTING.md), and run it in a disposable repository
 first.

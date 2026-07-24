@@ -23,10 +23,10 @@ Every model is tagged with how it reaches you:
 
 Say discovery finds two models:
 
-| Model | Paper blended price | Quality (AA index) |
+| Model | Paper blended price | Quality (AA coding index) |
 |---|---|---|
-| `openai/gpt-5.6-sol` | $11.25 / 1M tokens | 58.9 |
-| `commandcode/deepseek-v4-pro` | $0.75 / 1M tokens | 44.3 |
+| `openai/gpt-5.6-sol` | $11.25 / 1M tokens | 77.4 |
+| `commandcode/deepseek-v4-pro` | $0.75 / 1M tokens | 59.4 |
 
 Ranked on paper price, DeepSeek obviously wins the cost-sensitive `bulk` role.
 
@@ -79,5 +79,9 @@ not an oracle — you confirm every role before anything is saved.
 
 ## Where quality comes from
 
-See [Tools and commands](tools.md#flow_discover_models) for how quality scores
-are fetched keylessly and how they degrade when offline.
+Artificial Analysis's coding index, fetched keyless as JSON through OpenRouter's
+public models endpoint — no API key, no signup. Scores carry the index they came
+from, and are never mixed across indices.
+
+See [Tools and commands](tools.md#flow_discover_models) for the full source
+list, the exact-matching rules, and how everything degrades offline.
