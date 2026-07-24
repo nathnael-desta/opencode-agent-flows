@@ -170,7 +170,7 @@ export function rankForRole(
         billingSource,
         effectivePerMillion: cost.perMillion,
         effectiveNote: cost.note,
-        score: roleScore(weighting, { quality: candidate.quality?.intelligenceIndex, effectivePerMillion: cost.perMillion }),
+        score: roleScore(weighting, { quality: candidate.quality?.score, effectivePerMillion: cost.perMillion }),
       }
     })
     .sort((a, b) => b.score - a.score)

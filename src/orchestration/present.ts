@@ -9,7 +9,7 @@ function priceLabel(blended?: number): string {
 }
 
 function qualityLabel(index?: number): string {
-  return index === undefined ? "AA n/a" : `AA ${index.toFixed(1)}`
+  return index === undefined ? "quality n/a" : `AA coding ${index.toFixed(1)}`
 }
 
 /** Render the discovered catalog as per-role ranked recommendations. */
@@ -31,7 +31,7 @@ export function formatDiscovery(result: CatalogResult, opts?: { role?: Orchestra
     for (const candidate of ranked) {
       const context = candidate.context ? `, ${Math.round(candidate.context / 1000)}k ctx` : ""
       const reasoning = candidate.reasoning ? ", reasoning" : ""
-      lines.push(`- ${candidate.model} — ${qualityLabel(candidate.quality?.intelligenceIndex)}, ${priceLabel(candidate.blendedPerMillion)}${context}${reasoning}`)
+      lines.push(`- ${candidate.model} — ${qualityLabel(candidate.quality?.score)}, ${priceLabel(candidate.blendedPerMillion)}${context}${reasoning}`)
     }
   }
 

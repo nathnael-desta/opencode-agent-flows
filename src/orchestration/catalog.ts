@@ -2,10 +2,10 @@ import { join } from "node:path"
 import { fetchWithTimeout, readCache, readStaleCache, writeCache } from "./cache.js"
 import { buildCatalog, type DiscoveredProvider, type ModelCandidate, type ModelsDevIndex } from "./discovery.js"
 import {
-  ARTIFICIAL_ANALYSIS_CITATION,
-  ARTIFICIAL_ANALYSIS_URL,
   buildQualityIndex,
-  parseArtificialAnalysisHtml,
+  OPENROUTER_MODELS_URL,
+  parseOpenRouterModels,
+  QUALITY_ATTRIBUTION,
   QUALITY_SNAPSHOT,
   type QualityEntry,
 } from "./quality.js"
@@ -92,26 +92,30 @@ export async function discoverCatalog(opts: {
     }
   }
 
-  const qualityCache = join(opts.cacheDir, "artificial-analysis.json")
+  const qualityCache = join(opts.cacheDir, "model-quality.json")
   let quality = opts.refresh ? undefined : await readCache<QualityCache>(qualityCache, DAY_MS)
   if (!quality) {
     try {
-      const parsed = parseArtificialAnalysisHtml(await fetchText(ARTIFICIAL_ANALYSIS_URL))
+      const parsed = parseOpenRouterModels(JSON.parse(await fetchText(OPENROUTER_MODELS_URL)))
       if (parsed.length) {
         quality = { live: true, entries: parsed }
         await cacheQuietly(qualityCache, quality)
+        // The benchmarks field is public but undocumented, so a sharp drop in
+        // coverage is the early warning that it changed shape or went away.
+        if (parsed.length < QUALITY_SNAPSHOT.length / 2)
+          notes.push(`Quality coverage dropped to ${parsed.length} models (snapshot has ${QUALITY_SNAPSHOT.length}); the upstream field may have changed`)
       } else {
-        notes.push("Artificial Analysis page had no parsable index; using bundled quality snapshot")
+        notes.push("Quality data was missing from the models endpoint; using the bundled snapshot")
         quality = { live: false, entries: QUALITY_SNAPSHOT }
       }
     } catch (error) {
       const stale = await readStaleCache<QualityCache>(qualityCache)
       if (stale?.entries?.length) {
         quality = stale
-        notes.push(`Artificial Analysis unavailable (${message(error)}); using cached quality data`)
+        notes.push(`Quality source unavailable (${message(error)}); using cached quality data`)
       } else {
         quality = { live: false, entries: QUALITY_SNAPSHOT }
-        notes.push(`Artificial Analysis unavailable (${message(error)}); using bundled quality snapshot`)
+        notes.push(`Quality source unavailable (${message(error)}); using bundled quality snapshot`)
       }
     }
   }
@@ -122,8 +126,8 @@ export async function discoverCatalog(opts: {
 
   return {
     catalog,
-    qualitySource: quality.live ? "Artificial Analysis (live)" : "Artificial Analysis (bundled snapshot)",
-    attribution: ARTIFICIAL_ANALYSIS_CITATION,
+    qualitySource: quality.live ? "Artificial Analysis via OpenRouter (live)" : "Artificial Analysis via OpenRouter (bundled snapshot)",
+    attribution: QUALITY_ATTRIBUTION,
     notes,
   }
 }

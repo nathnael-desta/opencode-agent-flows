@@ -5,7 +5,7 @@ import { join } from "node:path"
 import { discoverCatalog, indexModelsDev } from "../src/orchestration/catalog.js"
 import { buildCatalog, normalizeProviders, rankForRole, roleWeighting } from "../src/orchestration/discovery.js"
 import { blendedPaperCost, effectiveCost, roleScore } from "../src/orchestration/economics.js"
-import { buildQualityIndex, parseArtificialAnalysisHtml, qualityKey, QUALITY_SNAPSHOT } from "../src/orchestration/quality.js"
+import { buildQualityIndex, parseOpenRouterModels, qualityKey, QUALITY_SNAPSHOT } from "../src/orchestration/quality.js"
 
 const providersResponse = {
   providers: [
@@ -26,13 +26,15 @@ const providersResponse = {
   ],
 }
 
-const artificialAnalysisHtml = `<html><head>
-<script type="application/ld+json">{"@type":"Dataset","name":"Cost per Intelligence Index Task","data":[{"label":"Ignore Me","intelligenceIndex":1}]}</script>
-<script type="application/ld+json">{"@type":"Dataset","name":"Artificial Analysis Intelligence Index","isAccessibleForFree":true,"data":[
-  {"label":"GPT-5.6 Sol (max)","intelligenceIndex":58.89},
-  {"label":"DeepSeek V4 Pro (max)","intelligenceIndex":44.3}
-]}</script>
-</head><body></body></html>`
+const openRouterPayload = JSON.stringify({
+  data: [
+    { id: "openai/gpt-5.6-sol", benchmarks: { artificial_analysis: { intelligence_index: 58.9, coding_index: 77.4, agentic_index: 54 } } },
+    { id: "deepseek/deepseek-v4-pro", benchmarks: { artificial_analysis: { intelligence_index: 44.3, coding_index: 59.4, agentic_index: 36.4 } } },
+    { id: "vendor/no-benchmarks", name: "No benchmarks" },
+  ],
+})
+
+const quality = () => buildQualityIndex(parseOpenRouterModels(JSON.parse(openRouterPayload)), true)
 
 describe("economics", () => {
   test("blends input and output 3:1", () => {
@@ -56,35 +58,46 @@ describe("economics", () => {
 })
 
 describe("quality", () => {
-  test("normalizes ids and labels to the same key", () => {
-    expect(qualityKey("GPT-5.6 Sol (max)")).toBe(qualityKey("gpt-5.6-sol"))
-    expect(qualityKey("MiMo-V2.5-Pro")).toBe(qualityKey("mimo-v2.5-pro"))
-    expect(qualityKey("Claude Fable 5 (with fallback)")).toBe(qualityKey("claude-fable-5"))
+  test("canonicalizes ids across the dot/dash difference between sources", () => {
+    // OpenRouter writes claude-opus-4.8; models.dev writes claude-opus-4-8.
+    expect(qualityKey("anthropic/claude-opus-4.8")).toBe(qualityKey("anthropic/claude-opus-4-8"))
+    expect(qualityKey("OpenAI/GPT-5.6-Sol")).toBe(qualityKey("openai/gpt-5-6-sol"))
   })
 
-  test("parses the intelligence index dataset from JSON-LD, ignoring other charts", () => {
-    const entries = parseArtificialAnalysisHtml(artificialAnalysisHtml)
+  test("parses the artificial_analysis benchmarks block", () => {
+    const entries = parseOpenRouterModels(JSON.parse(openRouterPayload))
     expect(entries).toHaveLength(2)
-    expect(entries[0]).toEqual({ label: "GPT-5.6 Sol (max)", intelligenceIndex: 58.89 })
-    expect(entries.some((entry) => entry.label === "Ignore Me")).toBe(false)
+    expect(entries[0]).toEqual({ id: "openai/gpt-5.6-sol", intelligence: 58.9, coding: 77.4, agentic: 54 })
+    expect(entries.some((entry) => entry.id === "vendor/no-benchmarks")).toBe(false)
   })
 
-  test("returns nothing for unparsable markup so callers fall back", () => {
-    expect(parseArtificialAnalysisHtml("<html><body>no data</body></html>")).toEqual([])
-    expect(parseArtificialAnalysisHtml('<script type="application/ld+json">{oops</script>')).toEqual([])
+  test("returns nothing for unusable payloads so callers fall back", () => {
+    expect(parseOpenRouterModels(null)).toEqual([])
+    expect(parseOpenRouterModels({ data: "nope" })).toEqual([])
+    expect(parseOpenRouterModels({ data: [{ id: "a/b" }] })).toEqual([])
   })
 
-  test("matches provider/model ids against Artificial Analysis labels", () => {
-    const index = buildQualityIndex(parseArtificialAnalysisHtml(artificialAnalysisHtml), true)
-    const match = index.match("openai/gpt-5.6-sol", "GPT-5.6 Sol")
-    expect(match?.intelligenceIndex).toBe(58.89)
-    expect(match?.source).toBe("artificial-analysis-live")
-    expect(index.match("openai/nonexistent-zzz")).toBeUndefined()
+  test("prefers the coding index and records the scale", () => {
+    const match = quality().match("openai/gpt-5.6-sol")
+    expect(match?.score).toBe(77.4)
+    expect(match?.scale).toBe("aa-coding-index")
+    expect(match?.intelligence).toBe(58.9)
+    expect(match?.source).toBe("openrouter-live")
+  })
+
+  test("resolves models routed through the openrouter provider", () => {
+    expect(quality().match("openrouter/openai/gpt-5.6-sol")?.score).toBe(77.4)
+  })
+
+  test("does not match unrelated or derivative ids", () => {
+    expect(quality().match("openai/nonexistent-zzz")).toBeUndefined()
+    expect(quality().match("openai/gpt-5.6-sol-mini")).toBeUndefined()
   })
 
   test("bundled snapshot is usable as a fallback index", () => {
     const index = buildQualityIndex(QUALITY_SNAPSHOT, false)
-    expect(index.match("openai/gpt-5.6-sol")?.source).toBe("artificial-analysis-snapshot")
+    expect(index.size).toBeGreaterThan(50)
+    expect(index.match("openai/gpt-5.6-sol")?.source).toBe("openrouter-snapshot")
   })
 })
 
@@ -106,11 +119,11 @@ describe("catalog assembly", () => {
   test("builds candidates with pricing and quality", () => {
     const catalog = buildCatalog({
       providers: normalizeProviders(providersResponse),
-      quality: buildQualityIndex(parseArtificialAnalysisHtml(artificialAnalysisHtml), true),
+      quality: quality(),
     })
     const sol = catalog.find((entry) => entry.model === "openai/gpt-5.6-sol")
     expect(sol?.blendedPerMillion).toBe((3 * 5 + 30) / 4)
-    expect(sol?.quality?.intelligenceIndex).toBe(58.89)
+    expect(sol?.quality?.score).toBe(77.4)
     expect(sol?.context).toBe(400_000)
   })
 
@@ -126,7 +139,7 @@ describe("catalog assembly", () => {
   test("ranks roles by their weighting and honors billing sources", () => {
     const catalog = buildCatalog({
       providers: normalizeProviders(providersResponse),
-      quality: buildQualityIndex(parseArtificialAnalysisHtml(artificialAnalysisHtml), true),
+      quality: quality(),
     })
     expect(roleWeighting("bulk")).toBe("cost-led")
     expect(roleWeighting("orchestrator")).toBe("quality-led")
@@ -151,11 +164,12 @@ describe("discoverCatalog degradation", () => {
         fetchText: async (url) =>
           url.includes("models.dev")
             ? JSON.stringify({ openai: { models: { "gpt-5.6-sol": { cost: { input: 5, output: 30 } } } } })
-            : artificialAnalysisHtml,
+            : openRouterPayload,
       })
-      expect(result.qualitySource).toBe("Artificial Analysis (live)")
+      expect(result.qualitySource).toContain("live")
       expect(result.catalog).toHaveLength(2)
-      expect(result.notes).toEqual([])
+      // The small fixture trips the coverage-drop warning; no source failed.
+      expect(result.notes.filter((note) => note.includes("unavailable"))).toEqual([])
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -171,7 +185,7 @@ describe("discoverCatalog degradation", () => {
           throw new Error("offline")
         },
       })
-      expect(result.qualitySource).toBe("Artificial Analysis (bundled snapshot)")
+      expect(result.qualitySource).toContain("bundled snapshot")
       expect(result.catalog).toHaveLength(2)
       expect(result.notes.join(" ")).toContain("offline")
       // Provider-supplied pricing still works with models.dev unavailable.
@@ -187,7 +201,7 @@ describe("discoverCatalog degradation", () => {
       let fetches = 0
       const fetchText = async (url: string) => {
         fetches += 1
-        return url.includes("models.dev") ? "{}" : artificialAnalysisHtml
+        return url.includes("models.dev") ? "{}" : openRouterPayload
       }
       const providers = normalizeProviders(providersResponse)
       await discoverCatalog({ providers, cacheDir: dir, fetchText })

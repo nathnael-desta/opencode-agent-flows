@@ -10,7 +10,7 @@ import plugin from "../plugin.js"
 import { discoverCatalog } from "../src/orchestration/catalog.js"
 import { normalizeOrchestrationConfig } from "../src/orchestration/config.js"
 import { buildCatalog, normalizeProviders, rankForRole } from "../src/orchestration/discovery.js"
-import { buildQualityIndex, parseArtificialAnalysisHtml, QUALITY_SNAPSHOT } from "../src/orchestration/quality.js"
+import { buildQualityIndex, parseOpenRouterModels, QUALITY_SNAPSHOT } from "../src/orchestration/quality.js"
 
 describe("S1: namespaced model ids", () => {
   // Over half of models.dev ids contain a slash inside the model half
@@ -33,9 +33,9 @@ describe("S1: namespaced model ids", () => {
 describe("S2: quality matching must not inherit a flagship's score", () => {
   const index = buildQualityIndex(QUALITY_SNAPSHOT, false)
 
-  test("derivative models do not inherit the flagship index", () => {
-    // Each of these previously matched its flagship and inherited a top score,
-    // which would make a cheap small model outrank the real flagship.
+  test("derivative models do not inherit the flagship score", () => {
+    // Each previously matched its flagship by substring and inherited a top
+    // score, which would make a cheap small model outrank the real flagship.
     for (const derivative of [
       "anthropic/claude-fable-5-haiku",
       "openai/gpt-5.6-sol-mini",
@@ -46,36 +46,34 @@ describe("S2: quality matching must not inherit a flagship's score", () => {
     }
   })
 
-  test("exact matches still resolve", () => {
-    expect(index.match("openai/gpt-5.6-sol")?.matchedLabel).toBe("GPT-5.6 Sol (max)")
-    expect(index.match("google/gemini-3.6-flash")?.matchedLabel).toBe("Gemini 3.6 Flash")
+  test("exact matches still resolve, preferring the coding index", () => {
+    const sol = index.match("openai/gpt-5.6-sol")
+    expect(sol?.matchedId).toBe("openai/gpt-5.6-sol")
+    expect(sol?.scale).toBe("aa-coding-index")
+    expect(index.match("google/gemini-3.6-flash")?.matchedId).toBe("google/gemini-3.6-flash")
   })
 
   test("matching does not depend on entry order", () => {
     const entries = [
-      { label: "Model X Pro", intelligenceIndex: 90 },
-      { label: "Model X", intelligenceIndex: 10 },
+      { id: "vendor/model-x-pro", coding: 90 },
+      { id: "vendor/model-x", coding: 10 },
     ]
     const forward = buildQualityIndex(entries, true)
     const reversed = buildQualityIndex([...entries].reverse(), true)
-    expect(forward.match("p/model-x")?.intelligenceIndex).toBe(10)
-    expect(reversed.match("p/model-x")?.intelligenceIndex).toBe(10)
-    expect(forward.match("p/model-x-pro")?.intelligenceIndex).toBe(90)
+    expect(forward.match("vendor/model-x")?.score).toBe(10)
+    expect(reversed.match("vendor/model-x")?.score).toBe(10)
+    expect(forward.match("vendor/model-x-pro")?.score).toBe(90)
   })
 
-  test("an exact display-name match is not lost to the model id", () => {
-    const index = buildQualityIndex(
-      [
-        { label: "GPT-5.6 Sol (max)", intelligenceIndex: 58.9 },
-        { label: "GPT-5.6 Terra (max)", intelligenceIndex: 55.0 },
-      ],
-      true,
-    )
-    expect(index.match("openai/gpt-5.6-terra", "GPT-5.6 Terra (max)")?.intelligenceIndex).toBe(55.0)
+  test("canonicalization joins the dot and dash id spellings without collisions", () => {
+    const index = buildQualityIndex([{ id: "anthropic/claude-opus-4.8", coding: 74.3 }], true)
+    // models.dev spells the same model with dashes.
+    expect(index.match("anthropic/claude-opus-4-8")?.score).toBe(74.3)
+    expect(index.match("anthropic/claude-opus-4-7")).toBeUndefined()
   })
 
-  test("resolves the last path segment of a namespaced id", () => {
-    expect(index.match("openrouter/openai/gpt-5.6-sol")?.matchedLabel).toBe("GPT-5.6 Sol (max)")
+  test("resolves ids routed through the openrouter provider", () => {
+    expect(index.match("openrouter/openai/gpt-5.6-sol")?.matchedId).toBe("openai/gpt-5.6-sol")
   })
 })
 
@@ -165,12 +163,12 @@ describe("S6: a cache write failure must not discard fetched data", () => {
       fetchText: async (url) =>
         url.includes("models.dev")
           ? JSON.stringify({ openai: { models: { "gpt-5.6-sol": { cost: { input: 5, output: 30 } } } } })
-          : '<script type="application/ld+json">{"@type":"Dataset","name":"Artificial Analysis Intelligence Index","data":[{"label":"GPT-5.6 Sol (max)","intelligenceIndex":58.9}]}</script>',
+          : JSON.stringify({ data: [{ id: "openai/gpt-5.6-sol", benchmarks: { artificial_analysis: { coding_index: 77.4 } } }] }),
     })
     // The successful fetch is kept even though caching failed.
     expect(result.catalog[0].blendedPerMillion).toBe((3 * 5 + 30) / 4)
-    expect(result.qualitySource).toBe("Artificial Analysis (live)")
-    expect(result.notes.join(" ")).not.toContain("unavailable")
+    expect(result.qualitySource).toContain("live")
+    expect(result.notes.filter((note) => note.includes("unavailable"))).toEqual([])
   })
 })
 
@@ -189,17 +187,18 @@ describe("S7: provider capabilities come from the SDK shape", () => {
   })
 })
 
-describe("S8 and S10: JSON-LD parsing edge cases", () => {
-  test("an empty flagship chart does not discard a usable sibling chart", () => {
-    const html = `
-      <script type="application/ld+json">{"@type":"Dataset","name":"Intelligence Index by Open Weights","data":[{"label":"Kimi K3","intelligenceIndex":57.1}]}</script>
-      <script type="application/ld+json">{"@type":"Dataset","name":"Artificial Analysis Intelligence Index","data":[]}</script>`
-    expect(parseArtificialAnalysisHtml(html)).toEqual([{ label: "Kimi K3", intelligenceIndex: 57.1 }])
+describe("quality payload edge cases", () => {
+  test("skips models with no benchmarks rather than failing", () => {
+    const entries = parseOpenRouterModels({
+      data: [{ id: "a/b" }, { id: "c/d", benchmarks: {} }, { id: "e/f", benchmarks: { artificial_analysis: { coding_index: 50 } } }],
+    })
+    expect(entries).toEqual([{ id: "e/f", coding: 50 }])
   })
 
-  test("handles a schema.org @graph wrapper", () => {
-    const html = `<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"Dataset","name":"Artificial Analysis Intelligence Index","data":[{"label":"Kimi K3","intelligenceIndex":57.1}]}]}</script>`
-    expect(parseArtificialAnalysisHtml(html)).toEqual([{ label: "Kimi K3", intelligenceIndex: 57.1 }])
+  test("tolerates a payload missing the benchmarks field entirely", () => {
+    // benchmarks.artificial_analysis is public but undocumented, so its
+    // disappearance must degrade to the snapshot, not throw.
+    expect(parseOpenRouterModels({ data: [{ id: "a/b", name: "B" }] })).toEqual([])
   })
 })
 
