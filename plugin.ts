@@ -2,8 +2,11 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import { tool } from "@opencode-ai/plugin"
 import { flows } from "./src/flows/index.js"
-import { loadOrchestrationConfig } from "./src/orchestration/config.js"
+import { loadOrchestrationConfig, ORCHESTRATION_ROLES, type OrchestrationRole } from "./src/orchestration/config.js"
 import { buildFlowFromConfig } from "./src/orchestration/roles.js"
+import { discoverCatalog } from "./src/orchestration/catalog.js"
+import { normalizeProviders } from "./src/orchestration/discovery.js"
+import { formatDiscovery } from "./src/orchestration/present.js"
 import type { AgentDefinition, AgentMetadata, FlowDefinition, OpenCodeConfig, PluginOptions } from "./src/types.js"
 import { expandPath, defaultTelemetryDirectory } from "./src/telemetry/path.js"
 import { normalizePricing } from "./src/telemetry/pricing.js"
@@ -632,6 +635,34 @@ export default async function agentFlowsPlugin(input: any, options: PluginOption
     },
   })
 
+  async function discoveredProviders() {
+    try {
+      const response = await input.client?.config?.providers?.()
+      return normalizeProviders(response?.data ?? response)
+    } catch {
+      return []
+    }
+  }
+
+  const discoverTool = tool({
+    description:
+      "Discover the OpenCode provider models available to you, enriched with models.dev pricing and Artificial Analysis quality, ranked per orchestration role. Use during setup to choose which model backs each role.",
+    args: {
+      role: tool.schema.string().optional(),
+      refresh: tool.schema.boolean().optional(),
+    },
+    async execute(args) {
+      const providers = await discoveredProviders()
+      const result = await discoverCatalog({
+        providers,
+        cacheDir: join(reportDirectory, "cache"),
+        refresh: args.refresh === true,
+      })
+      const role = args.role && (ORCHESTRATION_ROLES as readonly string[]).includes(args.role) ? (args.role as OrchestrationRole) : undefined
+      return formatDiscovery(result, { role })
+    },
+  })
+
   const statusTool = tool({
     description: "Show agent-flow telemetry for the latest run, current session, or all recorded runs.",
     args: {
@@ -906,6 +937,7 @@ export default async function agentFlowsPlugin(input: any, options: PluginOption
       flow_approve_escalation: approvalTool,
       flow_developer_mode: developerTool,
       flow_models: modelsTool,
+      flow_discover_models: discoverTool,
       flow_rift_status: riftStatusTool,
       flow_rift_init: riftInitTool,
       flow_rift_begin: riftBeginTool,
