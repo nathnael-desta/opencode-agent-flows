@@ -19,7 +19,8 @@
     "test": "bun test",
     "typecheck": "tsc --noEmit",
     "verify": "bun run docs:check && bun test && tsc --noEmit",
-    "setup": "bun scripts/setup.ts"
+    "setup": "bun scripts/setup.ts",
+    "docs:serve": "bunx docsify-cli serve docs"
   },
   "dependencies": {
     "@opencode-ai/plugin": "1.3.15"

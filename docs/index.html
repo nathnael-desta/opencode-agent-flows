@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>OpenCode Agent Flows</title>
+    <meta name="description" content="Provider-aware agentic orchestration for OpenCode: pick the right model for each role by effective cost and quality." />
+    <link rel="stylesheet" href="//cdn.jsdelivr.net/npm/docsify@5/dist/themes/core.min.css" />
+    <style>
+      :root {
+        --theme-color: #52d3c8;
+        --sidebar-width: 17rem;
+      }
+      .markdown-section table { display: table; width: 100%; }
+      .markdown-section code { color: #0b7f76; }
+    </style>
+  </head>
+  <body class="loading">
+    <div id="app">Loading documentation…</div>
+
+    <script>
+      window.$docsify = {
+        name: 'OpenCode Agent Flows',
+        repo: 'nathnael-desta/opencode-agent-flows',
+        loadSidebar: true,
+        coverpage: true,
+        auto2top: true,
+        maxLevel: 4,
+        subMaxLevel: 2,
+        routerMode: 'hash',
+        search: {
+          paths: 'auto',
+          placeholder: 'Search the docs',
+          noData: 'No results.',
+          depth: 3,
+        },
+      }
+    </script>
+
+    <script src="//cdn.jsdelivr.net/npm/docsify@5"></script>
+    <script src="//cdn.jsdelivr.net/npm/docsify@5/dist/plugins/search.min.js"></script>
+    <script src="//cdn.jsdelivr.net/npm/prismjs@1/components/prism-bash.min.js"></script>
+    <script src="//cdn.jsdelivr.net/npm/prismjs@1/components/prism-json.min.js"></script>
+    <script src="//cdn.jsdelivr.net/npm/prismjs@1/components/prism-typescript.min.js"></script>
+  </body>
+</html>

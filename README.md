@@ -4,6 +4,33 @@ Version-controlled, shareable agentic flows for OpenCode. Provider adapters
 stay in their own repositories; this project only decides which agent uses
 which provider, model, and reasoning effort.
 
+📚 **[Read the documentation](docs/)** — run `bun run docs:serve` and open
+<http://localhost:3000>.
+
+## Two Ways To Use It
+
+**Use a built-in flow** — opinionated and ready to go:
+
+```json
+["opencode-agent-flows", { "flow": "openai-commandcode-router", "setDefault": true }]
+```
+
+**Or generate your own** from the models you actually have. Run `/flow-setup`
+inside OpenCode (or `bun run setup`). It discovers your providers, prices them
+via models.dev, ranks them with Artificial Analysis quality scores, asks how each
+is billed, and writes a configuration:
+
+```json
+["opencode-agent-flows", { "flow": "custom", "setDefault": true }]
+```
+
+The key idea is **effective cost**: a model's paper price is usually not what
+you pay at the margin. A model covered by a flat subscription or a prepaid
+bundle — say Gemini Flash included with a Google AI Pro plan — is effectively
+free to call, so it can be the right cheap default despite a high list price.
+The setup interview captures that and re-ranks around it. See
+[docs/effective-cost.md](docs/effective-cost.md).
+
 ## OpenAI + Command Code Router
 
 The included flow combines:
@@ -214,6 +241,8 @@ allowance until a documented account-balance endpoint exists.
 
 See:
 
+- [`docs/`](docs/) for the full documentation site (`bun run docs:serve`).
+- [`docs/orchestration-setup.md`](docs/orchestration-setup.md) to choose your models.
 - [`docs/FEATURES.md`](docs/FEATURES.md) for every shared capability.
 - [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md) for all options.
 - [`docs/MANUAL-TESTING.md`](docs/MANUAL-TESTING.md) for the end-to-end checklist.

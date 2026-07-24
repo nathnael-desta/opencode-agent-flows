@@ -1,5 +1,27 @@
 # Configuration
 
+## Choosing A Flow
+
+The `flow` option selects which orchestration to run:
+
+| Value | Meaning |
+|---|---|
+| `openai-commandcode-router` | The built-in flow (default) |
+| `custom` | Your generated configuration — see [Choose your models](orchestration-setup.md) |
+
+```json
+["opencode-agent-flows", { "flow": "custom", "setDefault": true }]
+```
+
+With `"custom"`, the plugin loads
+`~/.local/state/opencode-agent-flows/orchestration-config.json`, written by the
+`/flow-setup` command or `bun run setup`. If that file is missing, startup fails
+with an error telling you to run setup — it does not silently fall back.
+
+A generated config binds models, variants, billing sources, and budgets. It
+**cannot** weaken prompts, tool permissions, step budgets, protected paths, or
+escalation approval; those stay owned by the plugin's role templates.
+
 ## Complete Example
 
 ```jsonc
@@ -147,3 +169,58 @@ published price card changes.
 The initial local telemetry prototype accepted `usageTracking`,
 `usageReportDir`, `usageToast`, and `displacementEfficiency` at the top level.
 They still work temporarily, but new configurations should use `telemetry`.
+
+## Generated Orchestration Config
+
+Written by `/flow-setup` or `bun run setup` to
+`~/.local/state/opencode-agent-flows/orchestration-config.json`:
+
+```json
+{
+  "version": 1,
+  "title": "My orchestration",
+  "roles": {
+    "orchestrator": { "model": "openai/gpt-5.6-sol", "variant": "low", "billingSource": "subscription-flat", "effectiveCostNote": "ChatGPT Plus" },
+    "routine": { "model": "commandcode/deepseek-v4-pro", "variant": "high", "billingSource": "credit-pool" },
+    "bulk": { "model": "google/gemini-3.6-flash", "billingSource": "bundled-credit", "effectiveCostNote": "Antigravity credits" }
+  },
+  "orchestration": { "maxTasksPerRun": 12, "maxConcurrentWorkers": 3 },
+  "reviewer": { "enabled": true, "maxRounds": 2, "maxFindings": 5 }
+}
+```
+
+Only `orchestrator` and `routine` are required. `bulk` and `reviewer` inherit
+`routine`; `deep` and `extreme-*` inherit `orchestrator`.
+
+`billingSource` is one of `metered`, `subscription-flat`, `credit-pool`,
+`bundled-credit`, or `unknown`. It determines effective cost — see
+[Effective cost](effective-cost.md).
+
+Edit it without redoing the interview:
+
+```text
+flow_configure role=reviewer model=commandcode/mimo-v2.5-pro billingSource=credit-pool
+flow_configure maxConcurrentWorkers=5
+flow_configure reset=true
+```
+
+## Registered Commands
+
+The plugin registers `/flow-setup` and `/flow-config` through the OpenCode
+config hook, so no skill file needs installing. It never overwrites a command
+you defined yourself.
+
+## Local State
+
+Everything persistent lives under the telemetry report directory
+(`telemetry.reportDir`, default `~/.local/state/opencode-agent-flows`):
+
+| File | Purpose |
+|---|---|
+| `orchestration-config.json` | Your generated flow |
+| `model-overrides.json` | Per-agent model overrides from `flow_models` |
+| `developer-mode.json` | Developer evaluation settings |
+| `cache/models-dev.json` | models.dev pricing cache (24h) |
+| `cache/artificial-analysis.json` | Quality index cache (24h) |
+| `runs/`, `sessions/`, `global.json` | Telemetry reports |
+| `dashboard.html` | Self-contained dashboard |

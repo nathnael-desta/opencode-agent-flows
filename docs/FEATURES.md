@@ -146,6 +146,69 @@ rounds is a hard ceiling. Style and findings already covered by deterministic
 checks are non-blocking. If review is unavailable, the orchestrator discloses
 that and performs one careful diff self-review.
 
+## Orchestration Setup
+
+Instead of hardcoding models in a flow file, a user can generate a flow from the
+models they actually have. See [Choose your models](orchestration-setup.md).
+
+### Keyless Model Discovery
+
+`flow_discover_models` combines three sources:
+
+| Signal | Source | Keyless |
+|---|---|---|
+| Availability | OpenCode's own provider list | yes |
+| Pricing, context, capabilities | [models.dev](https://models.dev) | yes |
+| Quality indices | [Artificial Analysis](https://artificialanalysis.ai) | yes |
+
+Artificial Analysis's documented API requires an account key even on its free
+tier. To avoid making users obtain one, quality is read from the public models
+page, which embeds its charts as schema.org `Dataset` blocks in
+`application/ld+json` (public and marked `isAccessibleForFree`). Attribution is
+preserved in the output.
+
+Every source degrades rather than failing: live, then a 24-hour cache, then a
+bundled quality snapshot or provider-supplied pricing. Discovery always returns
+a usable catalog, including offline. Because the public page lists roughly the
+top 20 models, niche models appear without a quality score rather than being
+hidden.
+
+### Effective Cost
+
+Paper price is rarely the user's marginal cost. Each model carries a billing
+source that transforms it:
+
+| Billing source | Effective marginal cost |
+|---|---|
+| `metered` | Paper price |
+| `subscription-flat` | ~$0 within plan capacity |
+| `credit-pool` | Paper price, from a fixed monthly balance |
+| `bundled-credit` | ~$0 until the bundle is exhausted |
+
+Roles rank `quality-led` (orchestrator, deep, extreme-*), `balanced` (routine,
+reviewer), or `cost-led` (bulk) over effective cost and quality — so a
+paper-expensive model already covered by a subscription or bundle can correctly
+become the cheap default. See [Effective cost](effective-cost.md).
+
+### Generated Flows
+
+`{ "flow": "custom" }` builds a `FlowDefinition` from the saved
+`orchestration-config.json`. Roles that are omitted inherit: `bulk` and
+`reviewer` from `routine`, `deep` and `extreme-*` from `orchestrator`.
+
+A generated config binds models, variants, billing sources, and budgets only.
+Prompts, tool permissions, step budgets, protected paths, and escalation
+approval stay owned by the plugin's role templates, so configuration cannot
+weaken guardrails.
+
+### Setup Surfaces
+
+- `/flow-setup` — the interview, registered by the plugin itself.
+- `/flow-config` and `flow_config` — view the saved configuration.
+- `flow_configure` — write it, wholesale or one role at a time.
+- `bun run setup` — terminal equivalent.
+- A configuration panel in the HTML dashboard.
+
 ## Developer Evaluation Mode
 
 Developer mode is off by default. It uses deterministic sampling, so the same
