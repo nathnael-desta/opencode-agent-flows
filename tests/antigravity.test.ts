@@ -43,6 +43,7 @@ describe("formatAntigravityStatus", () => {
     expect(text).toContain("Antigravity is available")
     expect(text).toContain("antigravity_vision")
     expect(text).toContain("long-horizon autonomy")
+    expect(text).toContain("only Google's own Gemini")
     expect(text).toContain("gemini-3.6-flash-high")
   })
 
