@@ -1,5 +1,6 @@
 import { mkdir, readFile, readdir, rename, unlink, writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
+import type { OrchestrationConfig } from "../orchestration/config.js"
 import { renderDashboard } from "./dashboard.js"
 import { buildGlobalReport } from "./reports.js"
 import { flowReportMarkdown, globalReportMarkdown } from "./markdown.js"
@@ -27,7 +28,12 @@ async function readJson<T>(path: string): Promise<T | undefined> {
 export class TelemetryStore {
   constructor(
     readonly directory: string,
-    readonly options: { dashboard?: boolean; retentionDays?: number } = {},
+    readonly options: {
+      dashboard?: boolean
+      retentionDays?: number
+      /** Supplies the saved orchestration config for the dashboard panel. */
+      orchestrationConfig?: () => Promise<OrchestrationConfig | undefined>
+    } = {},
   ) {}
 
   private runPath(report: FlowReport): string {
@@ -88,7 +94,8 @@ export class TelemetryStore {
       atomicWrite(join(this.directory, "global.md"), globalReportMarkdown(global)),
     ]
     if (this.options.dashboard !== false) {
-      writes.push(atomicWrite(join(this.directory, "dashboard.html"), renderDashboard(global, runs)))
+      const orchestration = await this.options.orchestrationConfig?.().catch(() => undefined)
+      writes.push(atomicWrite(join(this.directory, "dashboard.html"), renderDashboard(global, runs, orchestration)))
     }
     await Promise.all(writes)
     return global

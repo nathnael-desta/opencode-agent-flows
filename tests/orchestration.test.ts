@@ -9,6 +9,7 @@ import {
   type OrchestrationConfig,
 } from "../src/orchestration/config.js"
 import { buildFlowFromConfig } from "../src/orchestration/roles.js"
+import { renderDashboard } from "../src/telemetry/dashboard.js"
 
 const minimal: OrchestrationConfig = {
   version: 1,
@@ -118,5 +119,84 @@ describe("buildFlowFromConfig", () => {
     expect(flow.orchestration.maxConcurrentWorkers).toBe(5)
     expect(flow.reviewer?.enabled).toBe(false)
     expect(flow.reviewer?.maxRounds).toBe(1)
+  })
+})
+
+describe("dashboard orchestration panel", () => {
+  const emptyGlobal = {
+    generatedAt: Date.now(),
+    runs: 0,
+    totals: { costUsd: 0, apiEquivalentCostUsd: 0, subagentsSpawned: 0, apiEquivalentUnpricedCalls: 0 },
+    latestQuotas: [],
+  } as any
+
+  test("renders a placeholder when nothing is configured", () => {
+    const html = renderDashboard(emptyGlobal, [])
+    expect(html).toContain("No orchestration configuration is saved")
+    expect(html).toContain("flow-setup")
+  })
+
+  test("embeds the saved configuration for the panel", () => {
+    const html = renderDashboard(emptyGlobal, [], {
+      ...minimal,
+      title: "My setup",
+      roles: { ...minimal.roles, bulk: { model: "google/gemini-3.6-flash", billingSource: "bundled-credit", effectiveCostNote: "Antigravity" } },
+    })
+    expect(html).toContain("My setup")
+    expect(html).toContain("google/gemini-3.6-flash")
+    expect(html).toContain("bundled-credit")
+    expect(html).toContain("Antigravity")
+  })
+
+  test("escapes angle brackets in embedded JSON so the script cannot be broken", () => {
+    const html = renderDashboard(emptyGlobal, [], {
+      ...minimal,
+      title: "</script><script>alert(1)</script>",
+    })
+    expect(html).not.toContain("</script><script>alert(1)")
+  })
+
+  // The dashboard's rendering logic lives in an inline <script> that no
+  // typechecker sees. A misplaced paren there once threw on the first render
+  // line and blanked the entire dashboard, so execute it here.
+  function runDashboardScript(html: string) {
+    const match = html.match(/<script>([\s\S]*?)<\/script>/)
+    if (!match) throw new Error("dashboard has no inline script")
+    const store: Record<string, any> = {}
+    const element = (id: string) =>
+      (store[id] ??= {
+        _html: "",
+        _text: "",
+        set innerHTML(value: string) { this._html = value },
+        get innerHTML() { return this._html },
+        set textContent(value: string) { this._text = value },
+        get textContent() { return this._text },
+        style: {},
+        onclick: null,
+        dataset: {},
+      })
+    const document = { querySelector: (selector: string) => element(selector), querySelectorAll: () => [] }
+    new Function("document", match[1])(document)
+    return store
+  }
+
+  test("the inline dashboard script executes without runtime errors", () => {
+    const store = runDashboardScript(renderDashboard(emptyGlobal, [], minimal))
+    // Cards render, proving execution reached the first render line.
+    expect(store["#cards"]._html).toContain("Runs")
+    expect(store["#orchestration"]._html).toContain("orchestrator")
+  })
+
+  test("the panel shows inheritance and effective cost", () => {
+    const store = runDashboardScript(
+      renderDashboard(emptyGlobal, [], {
+        ...minimal,
+        roles: { ...minimal.roles, bulk: { model: "google/gemini-3.6-flash", billingSource: "bundled-credit" } },
+      }),
+    )
+    const panel = store["#orchestration"]._html
+    expect(panel).toContain("inherits routine")
+    expect(panel).toContain("~$0/M")
+    expect(panel).toContain("paper price")
   })
 })

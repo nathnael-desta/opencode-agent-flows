@@ -363,6 +363,7 @@ export default async function agentFlowsPlugin(input: any, options: PluginOption
   const store = new TelemetryStore(reportDirectory, {
     dashboard: telemetryOptions.dashboard,
     retentionDays: telemetryOptions.retentionDays,
+    orchestrationConfig: () => loadOrchestrationConfig(orchestrationConfigPath).catch(() => undefined),
   })
   const developerPath = join(reportDirectory, "developer-mode.json")
   const modelOverridesPath = join(reportDirectory, "model-overrides.json")

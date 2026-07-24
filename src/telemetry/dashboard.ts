@@ -1,11 +1,12 @@
+import type { OrchestrationConfig } from "../orchestration/config.js"
 import type { FlowReport, GlobalReport } from "./types.js"
 
 function safeJson(value: unknown): string {
   return JSON.stringify(value).replaceAll("<", "\\u003c")
 }
 
-export function renderDashboard(global: GlobalReport, reports: FlowReport[]): string {
-  const data = safeJson({ global, reports: reports.slice(-100).reverse() })
+export function renderDashboard(global: GlobalReport, reports: FlowReport[], orchestration?: OrchestrationConfig): string {
+  const data = safeJson({ global, reports: reports.slice(-100).reverse(), orchestration: orchestration ?? null })
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'"><title>Agent Flow Observatory</title>
 <style>
@@ -15,14 +16,26 @@ export function renderDashboard(global: GlobalReport, reports: FlowReport[]): st
 <section class="grid" id="cards"></section>
 <section class="layout"><div class="panel"><h2>Runs — select one for details</h2><div id="runs"></div></div><div class="panel"><h2>Developer evaluation mode</h2><div id="developer"></div><h2 style="margin-top:24px">Quota and budget</h2><div id="quotas"></div></div></section>
 <section class="split"><div class="panel"><h2>Model costs — selected run</h2><div id="models"></div></div><div class="panel"><h2>Agent costs — selected run</h2><div id="agents"></div></div></section>
+<section class="panel" style="margin-top:16px"><h2>Orchestration configuration</h2><div id="orchestration"></div></section>
 </main><script>
-const DATA=${data},g=DATA.global,reports=DATA.reports;let selected=0;
+const DATA=${data},g=DATA.global,reports=DATA.reports,orchestration=DATA.orchestration;let selected=0;
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));const money=n=>'$'+Number(n||0).toFixed(4);const duration=ms=>ms==null?'Unavailable':ms<1000?Math.round(ms)+'ms':ms<60000?(ms/1000).toFixed(1)+'s':ms<3600000?Math.floor(ms/60000)+'m '+Math.round(ms%60000/1000)+'s':Math.floor(ms/3600000)+'h';
 const api=(cost,unpriced)=>Number(unpriced||0)>0?(Number(cost||0)>0?money(cost)+' + ':'')+unpriced+' unpriced':money(cost);const apiTotal=t=>api(t?.apiEquivalentCostUsd,t?.apiEquivalentUnpricedCalls);
 document.querySelector('#updated').textContent='Updated '+new Date(g.generatedAt).toLocaleString();
-document.querySelector('#cards').innerHTML=[['Runs',g.runs],['Metered cost',money(g.totals.costUsd)],['API-equivalent',apiTotal(g.totals)],['Subagent calls',g.totals.subagentsSpawned],['Average time',duration(g.averageDurationMs)]].map(([k,v],i=>'<div class="card"><small>'+k+'</small><strong class="'+(i===2?'accent':'')+'">'+v+'</strong></div>')).join('');
+document.querySelector('#cards').innerHTML=[['Runs',g.runs],['Metered cost',money(g.totals.costUsd)],['API-equivalent',apiTotal(g.totals)],['Subagent calls',g.totals.subagentsSpawned],['Average time',duration(g.averageDurationMs)]].map(([k,v],i)=>'<div class="card"><small>'+k+'</small><strong class="'+(i===2?'accent':'')+'">'+v+'</strong></div>').join('');
 function renderRuns(){document.querySelector('#runs').innerHTML=reports.length?'<table><thead><tr><th>Run</th><th>Flow</th><th class="num">Time</th><th class="num">Metered</th><th class="num">API-eq.</th></tr></thead><tbody>'+reports.map((r,i)=>'<tr class="run '+(i===selected?'selected':'')+'" data-run="'+i+'"><td><span class="pill">'+esc(String(r.runID||'session').slice(-10))+'</span></td><td>'+esc(r.flowTitle)+'</td><td class="num">'+duration(r.durationMs)+'</td><td class="num">'+money(r.totals.costUsd)+'</td><td class="num">'+apiTotal(r.totals)+'</td></tr>').join('')+'</tbody></table>':'<div class="empty">No completed runs yet.</div>';document.querySelectorAll('[data-run]').forEach(el=>el.onclick=()=>{selected=Number(el.dataset.run);renderRuns();renderDetails()})}
 function renderDetails(){const r=reports[selected];if(!r){document.querySelector('#models').innerHTML=document.querySelector('#agents').innerHTML='<div class="empty">No run selected.</div>';return}const modelRows=r.byModel||[],agentRows=r.byAgent||[];document.querySelector('#models').innerHTML=modelRows.length?'<table><thead><tr><th>Model</th><th class="num">Calls</th><th class="num">Tokens</th><th class="num">Metered</th><th class="num">API-eq.</th></tr></thead><tbody>'+modelRows.map(m=>'<tr><td>'+esc(m.providerID+'/'+m.modelID)+'</td><td class="num">'+m.calls+'</td><td class="num">'+Number(m.workloadUnits||0).toLocaleString()+'</td><td class="num">'+money(m.costUsd)+'</td><td class="num">'+api(m.apiEquivalentCostUsd,m.apiEquivalentUnpricedCalls)+'</td></tr>').join('')+'</tbody></table>':'<div class="empty">No model calls recorded.</div>';document.querySelector('#agents').innerHTML=agentRows.length?'<table><thead><tr><th>Agent / role</th><th>Model</th><th class="num">Calls</th><th class="num">Metered</th><th class="num">API-eq.</th></tr></thead><tbody>'+agentRows.map(a=>'<tr><td>'+esc(a.agent)+'<br><span class="muted">'+esc(a.role)+'</span></td><td>'+esc(a.modelID||'unknown')+'</td><td class="num">'+a.calls+'</td><td class="num">'+money(a.costUsd)+'</td><td class="num">'+api(a.apiEquivalentCostUsd,a.apiEquivalentUnpricedCalls)+'</td></tr>').join('')+'</tbody></table>':'<div class="empty">No agent activity recorded.</div>';const d=r.developerMode;document.querySelector('#developer').innerHTML=d?'<div><strong class="'+(d.enabled?'accent':'warning')+'">'+(d.enabled?'Enabled':'Disabled')+'</strong><p class="muted">Audit '+d.auditReview+' · Shadow plan '+d.shadowPlanning+' · Shadow implementation '+d.shadowImplementation+' · Sample '+Math.round(d.sampleRate*100)+'%</p><p class="note">Change it with <code>flow_developer_mode</code>; no JSON edit or restart is required.</p></div>':'<div class="empty">No developer-mode snapshot was recorded for this older run.</div>'}
+const ROLES=['orchestrator','bulk','routine','reviewer','deep','extreme-medium','extreme-high'],FALLBACK={bulk:'routine',reviewer:'routine',deep:'orchestrator','extreme-medium':'orchestrator','extreme-high':'orchestrator'};
+const FREE_BILLING={'subscription-flat':1,'bundled-credit':1};
+function inheritedFrom(roles,role){if(roles[role])return null;let c=FALLBACK[role];while(c&&!roles[c])c=FALLBACK[c];return c||null}
+function renderOrchestration(){const el=document.querySelector('#orchestration');if(!orchestration){el.innerHTML='<div class="empty">No orchestration configuration is saved. Run the <code>flow-setup</code> command in OpenCode, or <code>bun run setup</code>, to choose a model for each role.</div>';return}
+const roles=orchestration.roles||{};const rows=ROLES.map(role=>{const inh=inheritedFrom(roles,role);const b=roles[role]||(inh?roles[inh]:null);if(!b)return '';const billing=b.billingSource||'unknown';const eff=FREE_BILLING[billing]?'~$0/M':'paper price';
+return '<tr><td>'+esc(role)+(inh?'<br><span class="muted">inherits '+esc(inh)+'</span>':'')+'</td><td>'+esc(b.model)+(b.variant?' <span class="muted">('+esc(b.variant)+')</span>':'')+'</td><td><span class="pill">'+esc(billing)+'</span></td><td class="'+(FREE_BILLING[billing]?'accent':'')+'">'+eff+'</td><td class="muted">'+esc(b.effectiveCostNote||'')+'</td></tr>'}).join('');
+const o=orchestration.orchestration||{},r=orchestration.reviewer||{};
+el.innerHTML='<p class="muted">'+esc(orchestration.title||'Custom orchestration')+'</p><table><thead><tr><th>Role</th><th>Model</th><th>Billing</th><th>Effective</th><th>Why</th></tr></thead><tbody>'+rows+'</tbody></table>'
++'<p class="note">Budgets: '+(o.maxTasksPerRun??12)+' tasks per run, '+(o.maxConcurrentWorkers??3)+' concurrent workers. Review '+(r.enabled===false?'disabled':'enabled')+', max '+(r.maxRounds??2)+' round(s), max '+(r.maxFindings??5)+' findings.</p>'
++'<p class="note">Change one role with <code>flow_configure</code>, or re-run the <code>flow-setup</code> command. Restart OpenCode to apply.</p>'}
+renderOrchestration();
 const qs=g.latestQuotas||[];document.querySelector('#quotas').innerHTML=qs.length?qs.map(q=>{const used=q.primary?.usedPercent??(q.allowanceUsd?100*(q.spentUsd||0)/q.allowanceUsd:0);return '<div><div style="display:flex;justify-content:space-between"><span>'+esc(q.source)+'</span><span>'+Number(used).toFixed(1)+'%</span></div><div class="bar"><span style="width:'+Math.min(100,used)+'%"></span></div></div>'}).join('<br>'):'<div class="empty">No quota source available.</div>';renderRuns();renderDetails();
 </script></body></html>`
 }
