@@ -33,7 +33,8 @@ export const SETUP_COMMAND_TEMPLATE = [
   "",
   "6. Persist with flow_configure, passing a roles JSON object mapping each role to its model, optional variant, billingSource, and a short effectiveCostNote explaining why it is cheap or expensive for this user.",
   "",
-  "7. Finish by telling the user to set { \"flow\": \"custom\" } in their opencode.json plugin options and restart OpenCode, and that flow_config shows the saved configuration at any time.",
+  "7. Call flow_antigravity. If Antigravity (Google AI Pro / agy CLI) is available, tell the user that Gemini can serve as an effectively-free bundled-credit helper for vision, large-context reads, and bulk work, and that installing the opencode-antigravity-delegate plugin exposes antigravity_vision / antigravity_delegate / antigravity_background tools the orchestrator will use automatically. Do not change their role bindings for this; it is a complementary helper, not a role model.",
+  "8. Finish by telling the user to set { \"flow\": \"custom\" } in their opencode.json plugin options and restart OpenCode, and that flow_config shows the saved configuration at any time.",
 ].join("\n")
 
 export const CONFIG_COMMAND_TEMPLATE = [

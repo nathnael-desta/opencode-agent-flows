@@ -114,6 +114,19 @@ flow_models agent=routine model=commandcode/laguna-s-2.1-free
 flow_models agent=routine reset=true
 ```
 
+### `flow_antigravity`
+
+Detects whether Google Antigravity (Gemini on a Google AI Pro subscription, via
+the `agy` CLI) is available, and prints how to route work to it. Gemini is an
+effectively-free helper for **vision** (screenshots, UI, PDFs, diagrams —
+stronger than frontier coding models), **large-context reads** (1M window), and
+**cheap bulk work**. Keep the agentic loop and review on your primary models;
+Flash is weak at long-horizon autonomy.
+
+The tools themselves ship in the separate `opencode-antigravity-delegate` plugin
+(`antigravity_vision` / `antigravity_delegate` / `antigravity_background_*`);
+when both plugins are loaded the orchestrator delegates to them automatically.
+
 ## Telemetry
 
 | Tool | Purpose |

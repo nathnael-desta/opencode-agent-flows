@@ -17,6 +17,9 @@ import { discoverCatalog } from "./src/orchestration/catalog.js"
 import { normalizeProviders } from "./src/orchestration/discovery.js"
 import { formatDiscovery, formatOrchestrationConfig } from "./src/orchestration/present.js"
 import { CONFIG_COMMAND_TEMPLATE, SETUP_COMMAND_TEMPLATE } from "./src/orchestration/setup-prompt.js"
+import { detectAntigravity, formatAntigravityStatus, type ProbeRunner } from "./src/orchestration/antigravity.js"
+import { execFile } from "node:child_process"
+import { promisify } from "node:util"
 import type { AgentDefinition, AgentMetadata, FlowDefinition, OpenCodeConfig, PluginOptions } from "./src/types.js"
 import { expandPath, defaultTelemetryDirectory } from "./src/telemetry/path.js"
 import { normalizePricing } from "./src/telemetry/pricing.js"
@@ -659,6 +662,28 @@ export default async function agentFlowsPlugin(input: any, options: PluginOption
     },
   })
 
+  const runProbe: ProbeRunner = async (probeCommand, args) => {
+    try {
+      const { stdout } = await promisify(execFile)(probeCommand, args, { timeout: 15_000 })
+      return { stdout, code: 0 }
+    } catch (error) {
+      const err = error as { code?: number | null; stdout?: string }
+      return { stdout: err.stdout ?? "", code: typeof err.code === "number" ? err.code : null }
+    }
+  }
+
+  const antigravityTool = tool({
+    description:
+      "Check whether Google Antigravity (Gemini on a Google AI Pro subscription, via the agy CLI) is available, and how to route work to it. Gemini is an effectively-free helper for vision, large-context reads, and bulk work.",
+    args: {
+      command: tool.schema.string().optional().describe("Path to the agy binary (default: agy)."),
+    },
+    async execute(args) {
+      const status = await detectAntigravity(runProbe, args.command ?? "agy")
+      return formatAntigravityStatus(status)
+    },
+  })
+
   async function readOrchestrationConfig(): Promise<OrchestrationConfig | undefined> {
     try {
       return await loadOrchestrationConfig(orchestrationConfigPath)
@@ -883,6 +908,7 @@ export default async function agentFlowsPlugin(input: any, options: PluginOption
       flow_discover_models: discoverTool,
       flow_config: configViewTool,
       flow_configure: configureTool,
+      flow_antigravity: antigravityTool,
     },
     "chat.message": async (chatInput: { sessionID: string; agent?: string; messageID?: string }, output: { message: RawMessage }) => {
       if (chatInput.agent) sessionAgents.set(chatInput.sessionID, chatInput.agent)

@@ -11,6 +11,7 @@ One page listing every capability, with where to read more.
 | Keyless discovery | models.dev pricing + AA coding index via OpenRouter, no API key | [Tools](tools.md#flow_discover_models) |
 | Generated flows | `{ "flow": "custom" }` builds a flow from saved config | [Configuration](CONFIGURATION.md) |
 | Config view/edit | `/flow-config`, `flow_configure`, dashboard panel | [Tools](tools.md) |
+| Antigravity helper | Detect Gemini (AI Pro) and route vision/large-context/bulk to it | [Tools](tools.md#flow_antigravity) |
 | Terminal + scripted setup | `bun run setup`, with flags for unattended runs | [Scripted setup](orchestration-setup.md#scripted-setup) |
 
 ## Running work
