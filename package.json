@@ -18,7 +18,8 @@
     "docs:check": "bun scripts/generate-docs.ts --check",
     "test": "bun test",
     "typecheck": "tsc --noEmit",
-    "verify": "bun run docs:check && bun test && tsc --noEmit"
+    "verify": "bun run docs:check && bun test && tsc --noEmit",
+    "setup": "bun scripts/setup.ts"
   },
   "dependencies": {
     "@opencode-ai/plugin": "1.3.15"

@@ -1,12 +1,22 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises"
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import { tool } from "@opencode-ai/plugin"
 import { flows } from "./src/flows/index.js"
-import { loadOrchestrationConfig, ORCHESTRATION_ROLES, type OrchestrationRole } from "./src/orchestration/config.js"
+import {
+  BILLING_SOURCES,
+  loadOrchestrationConfig,
+  normalizeOrchestrationConfig,
+  ORCHESTRATION_CONFIG_VERSION,
+  ORCHESTRATION_ROLES,
+  saveOrchestrationConfig,
+  type OrchestrationConfig,
+  type OrchestrationRole,
+} from "./src/orchestration/config.js"
 import { buildFlowFromConfig } from "./src/orchestration/roles.js"
 import { discoverCatalog } from "./src/orchestration/catalog.js"
 import { normalizeProviders } from "./src/orchestration/discovery.js"
-import { formatDiscovery } from "./src/orchestration/present.js"
+import { formatDiscovery, formatOrchestrationConfig } from "./src/orchestration/present.js"
+import { CONFIG_COMMAND_TEMPLATE, SETUP_COMMAND_TEMPLATE } from "./src/orchestration/setup-prompt.js"
 import type { AgentDefinition, AgentMetadata, FlowDefinition, OpenCodeConfig, PluginOptions } from "./src/types.js"
 import { expandPath, defaultTelemetryDirectory } from "./src/telemetry/path.js"
 import { normalizePricing } from "./src/telemetry/pricing.js"
@@ -663,6 +673,102 @@ export default async function agentFlowsPlugin(input: any, options: PluginOption
     },
   })
 
+  async function readOrchestrationConfig(): Promise<OrchestrationConfig | undefined> {
+    try {
+      return await loadOrchestrationConfig(orchestrationConfigPath)
+    } catch {
+      return undefined
+    }
+  }
+
+  const configViewTool = tool({
+    description: "Show the saved orchestration configuration: which model backs each role, how it is billed, and whether it is currently active.",
+    args: {},
+    async execute() {
+      return formatOrchestrationConfig(await readOrchestrationConfig(), {
+        path: orchestrationConfigPath,
+        active: options.flow === "custom",
+      })
+    },
+  })
+
+  const configureTool = tool({
+    description:
+      "Persist the orchestration configuration. Pass roles as a JSON object to set every role at once, or role plus model to change a single role. Restart OpenCode to apply.",
+    args: {
+      roles: tool.schema.string().optional(),
+      role: tool.schema.string().optional(),
+      model: tool.schema.string().optional(),
+      variant: tool.schema.string().optional(),
+      billingSource: tool.schema.string().optional(),
+      effectiveCostNote: tool.schema.string().optional(),
+      title: tool.schema.string().optional(),
+      maxTasksPerRun: tool.schema.number().optional(),
+      maxConcurrentWorkers: tool.schema.number().optional(),
+      reviewerEnabled: tool.schema.boolean().optional(),
+      reset: tool.schema.boolean().optional(),
+    },
+    async execute(args) {
+      const current = await readOrchestrationConfig()
+
+      if (args.reset) {
+        if (!current) return "No orchestration configuration is saved; nothing to reset."
+        await rm(orchestrationConfigPath, { force: true })
+        return `Removed ${orchestrationConfigPath}. The plugin falls back to its built-in flow until you configure again.`
+      }
+
+      const draft: Record<string, unknown> = current
+        ? { ...current, roles: { ...current.roles } }
+        : { version: ORCHESTRATION_CONFIG_VERSION, roles: {} }
+
+      if (args.roles) {
+        let parsed: unknown
+        try {
+          parsed = JSON.parse(args.roles)
+        } catch (error) {
+          throw new Error(`roles must be a JSON object of role -> binding: ${error instanceof Error ? error.message : String(error)}`)
+        }
+        if (typeof parsed !== "object" || parsed === null) throw new Error("roles must be a JSON object of role -> binding")
+        draft.roles = parsed
+      }
+
+      if (args.role) {
+        if (!(ORCHESTRATION_ROLES as readonly string[]).includes(args.role))
+          throw new Error(`Unknown role: ${args.role}. Available roles: ${ORCHESTRATION_ROLES.join(", ")}`)
+        if (!args.model) throw new Error("model is required when setting a single role")
+        if (args.billingSource && !(BILLING_SOURCES as readonly string[]).includes(args.billingSource))
+          throw new Error(`Unknown billingSource: ${args.billingSource}. Available: ${BILLING_SOURCES.join(", ")}`)
+        ;(draft.roles as Record<string, unknown>)[args.role] = {
+          model: args.model,
+          ...(args.variant ? { variant: args.variant } : {}),
+          ...(args.billingSource ? { billingSource: args.billingSource } : {}),
+          ...(args.effectiveCostNote ? { effectiveCostNote: args.effectiveCostNote } : {}),
+        }
+      }
+
+      if (args.title) draft.title = args.title
+      if (args.maxTasksPerRun !== undefined || args.maxConcurrentWorkers !== undefined)
+        draft.orchestration = {
+          ...(draft.orchestration as Record<string, unknown> | undefined),
+          ...(args.maxTasksPerRun !== undefined ? { maxTasksPerRun: args.maxTasksPerRun } : {}),
+          ...(args.maxConcurrentWorkers !== undefined ? { maxConcurrentWorkers: args.maxConcurrentWorkers } : {}),
+        }
+      if (args.reviewerEnabled !== undefined)
+        draft.reviewer = { ...(draft.reviewer as Record<string, unknown> | undefined), enabled: args.reviewerEnabled }
+
+      if (!args.roles && !args.role && args.title === undefined && args.maxTasksPerRun === undefined && args.maxConcurrentWorkers === undefined && args.reviewerEnabled === undefined)
+        return formatOrchestrationConfig(current, { path: orchestrationConfigPath, active: options.flow === "custom" })
+
+      const normalized = normalizeOrchestrationConfig(draft)
+      await saveOrchestrationConfig(orchestrationConfigPath, normalized)
+      return [
+        formatOrchestrationConfig(normalized, { path: orchestrationConfigPath, active: options.flow === "custom" }),
+        "",
+        "Saved. Restart OpenCode to apply.",
+      ].join("\n")
+    },
+  })
+
   const statusTool = tool({
     description: "Show agent-flow telemetry for the latest run, current session, or all recorded runs.",
     args: {
@@ -929,6 +1035,17 @@ export default async function agentFlowsPlugin(input: any, options: PluginOption
         config.agent["flow-shadow-implementer"] ??= evaluatorAgent(baseline, "Create a read-only patch proposal without modifying files.", "shadow-implementation")
       }
       if (options.setDefault !== false) config.default_agent ??= flow.defaultAgent
+      config.command ??= {}
+      config.command["flow-setup"] ??= {
+        template: SETUP_COMMAND_TEMPLATE,
+        description: "Interview to choose which model backs each orchestration role, using your available providers, pricing, and effective cost.",
+        agent: flow.defaultAgent,
+      }
+      config.command["flow-config"] ??= {
+        template: CONFIG_COMMAND_TEMPLATE,
+        description: "Show the saved orchestration configuration.",
+        agent: flow.defaultAgent,
+      }
     },
     tool: {
       flow_status: statusTool,
@@ -938,6 +1055,8 @@ export default async function agentFlowsPlugin(input: any, options: PluginOption
       flow_developer_mode: developerTool,
       flow_models: modelsTool,
       flow_discover_models: discoverTool,
+      flow_config: configViewTool,
+      flow_configure: configureTool,
       flow_rift_status: riftStatusTool,
       flow_rift_init: riftInitTool,
       flow_rift_begin: riftBeginTool,

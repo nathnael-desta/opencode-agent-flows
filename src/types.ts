@@ -64,6 +64,7 @@ export interface FlowDefinition {
 export interface OpenCodeConfig {
   default_agent?: string
   agent?: Record<string, AgentDefinition | Record<string, unknown>>
+  command?: Record<string, { template: string; description?: string; agent?: string; model?: string; subtask?: boolean }>
 }
 
 export interface DeveloperModeOptions {
