@@ -48,6 +48,19 @@ which quality source was used, and carries the required attribution.
 > The public page lists roughly the top 20 models, so niche models may have no
 > quality score. They still appear, marked `AA n/a`.
 
+**Matching is exact, on purpose.** A model only receives a quality score when
+its id or display name matches a published label exactly (after normalization).
+Fuzzy matching was removed because every `-mini`, `-lite`, `-haiku`, `-air`, and
+`-nano` derivative contains its flagship's name and would inherit the flagship's
+score — making a cheap small model outrank the real frontier model and
+inverting the very recommendation this exists to produce. A missing score is
+safer than a wrong one.
+
+**Models that cannot call tools are excluded from ranking.** Every role
+delegates through tools, so a free embedding or text-to-speech model is
+unusable regardless of price. Without this filter they would top the cost-led
+ranking.
+
 ### `flow_config`
 
 Shows each role's model, billing source, effective cost, rationale, which roles

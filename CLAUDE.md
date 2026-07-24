@@ -45,8 +45,17 @@ bun run setup    # interactive terminal setup for the orchestration config
 
 - **Guardrails are plugin-owned.** A user's generated `orchestration-config.json`
   binds model/variant/billing and tunes budgets. It must never be able to weaken
-  prompts, permissions, step budgets, protected paths, or escalation approval.
-  Role templates in `src/orchestration/roles.ts` own those.
+  prompts, permissions, per-agent step budgets, protected paths, or escalation
+  approval. Role templates in `src/orchestration/roles.ts` own those.
+- **Untrusted config values are clamped, never trusted.** Flow-level budgets
+  come from a file a user can hand-edit. `normalizeOrchestrationConfig` clamps
+  them to sane ranges, because unbounded values can remove the concurrency limit
+  or make every reviewer call throw, silently disabling the review gate.
+- **A broken config must never disable the plugin.** `resolveFlow` degrades to
+  the built-in flow, because throwing there unregisters every tool — including
+  the ones needed to repair the config.
+- **Never fuzzy-match model quality.** Exact match only; derivatives would
+  inherit their flagship's score and invert every ranking.
 - **Escalation requires approval.** `deep` and `extreme-*` need an explicit
   one-use `flow_approve_escalation` token, and `deep` needs concrete failed or
   blocked routine evidence first. Cheap-first is structural, not advisory.

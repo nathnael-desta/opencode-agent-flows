@@ -347,19 +347,40 @@ function evaluatorAgent(baseline: AgentDefinition, instruction: string, source: 
   }
 }
 
-async function resolveFlow(name: string | undefined, orchestrationConfigPath: string): Promise<FlowDefinition> {
-  const selected = name ?? "openai-commandcode-router"
-  if (selected === "custom") return buildFlowFromConfig(await loadOrchestrationConfig(orchestrationConfigPath))
+const DEFAULT_FLOW = "openai-commandcode-router"
+
+/**
+ * Resolve the active flow. A broken custom configuration degrades to the
+ * built-in flow rather than throwing: this function runs before the hooks
+ * object exists, so rejecting here would unregister every tool the user needs
+ * to repair the configuration — including flow_configure itself.
+ */
+async function resolveFlow(
+  name: string | undefined,
+  orchestrationConfigPath: string,
+): Promise<{ flow: FlowDefinition; configError?: string }> {
+  const selected = name ?? DEFAULT_FLOW
+  if (selected === "custom") {
+    try {
+      return { flow: buildFlowFromConfig(await loadOrchestrationConfig(orchestrationConfigPath)) }
+    } catch (error) {
+      return {
+        flow: flows[DEFAULT_FLOW],
+        configError: error instanceof Error ? error.message : String(error),
+      }
+    }
+  }
   const flow = flows[selected]
   if (!flow) throw new Error(`Unknown OpenCode agent flow: ${name}. Available: ${Object.keys(flows).join(", ")}, custom`)
-  return flow
+  return { flow }
 }
 
 export default async function agentFlowsPlugin(input: any, options: PluginOptions = {}) {
   const telemetryOptions = options.telemetry ?? {}
   const reportDirectory = expandPath(telemetryOptions.reportDir ?? options.usageReportDir ?? defaultTelemetryDirectory())
   const orchestrationConfigPath = join(reportDirectory, "orchestration-config.json")
-  const flow = await resolveFlow(options.flow, orchestrationConfigPath)
+  const { flow, configError } = await resolveFlow(options.flow, orchestrationConfigPath)
+  if (configError) console.warn(`opencode-agent-flows: using the built-in ${DEFAULT_FLOW} flow because the custom configuration could not be loaded. ${configError}`)
   const store = new TelemetryStore(reportDirectory, {
     dashboard: telemetryOptions.dashboard,
     retentionDays: telemetryOptions.retentionDays,
@@ -630,7 +651,7 @@ export default async function agentFlowsPlugin(input: any, options: PluginOption
         return `Reset ${args.agent} to ${configuredAgents[args.agent].model}${configuredAgents[args.agent].variant ? ` (${configuredAgents[args.agent].variant})` : ""}. Restart OpenCode to apply it.`
       }
       if (!args.model) throw new Error("model is required unless reset is true")
-      if (!/^[^/\s]+\/[^/\s]+$/.test(args.model)) throw new Error("model must use provider/model format, for example commandcode/laguna-s-2.1-free")
+      if (!/^[^/\s]+\/\S+$/.test(args.model)) throw new Error("model must use provider/model format, for example commandcode/laguna-s-2.1-free or openrouter/anthropic/claude-sonnet-4")
       modelOverrides[args.agent] = {
         model: args.model,
         ...(args.variant ? { variant: args.variant } : {}),
@@ -686,10 +707,18 @@ export default async function agentFlowsPlugin(input: any, options: PluginOption
     description: "Show the saved orchestration configuration: which model backs each role, how it is billed, and whether it is currently active.",
     args: {},
     async execute() {
-      return formatOrchestrationConfig(await readOrchestrationConfig(), {
+      const view = formatOrchestrationConfig(await readOrchestrationConfig(), {
         path: orchestrationConfigPath,
-        active: options.flow === "custom",
+        active: options.flow === "custom" && !configError,
       })
+      if (!configError) return view
+      return [
+        `> Your configuration could not be loaded, so the built-in ${DEFAULT_FLOW} flow is running instead.`,
+        `> Reason: ${configError}`,
+        "> Fix it with flow_configure, or re-run the flow-setup command, then restart OpenCode.",
+        "",
+        view,
+      ].join("\n")
     },
   })
 
@@ -713,9 +742,11 @@ export default async function agentFlowsPlugin(input: any, options: PluginOption
       const current = await readOrchestrationConfig()
 
       if (args.reset) {
-        if (!current) return "No orchestration configuration is saved; nothing to reset."
+        // Delete unconditionally: readOrchestrationConfig also swallows parse
+        // and validation errors, so refusing when `current` is undefined would
+        // refuse exactly the corrupt file that most needs removing.
         await rm(orchestrationConfigPath, { force: true })
-        return `Removed ${orchestrationConfigPath}. The plugin falls back to its built-in flow until you configure again.`
+        return `Removed ${orchestrationConfigPath}. The plugin falls back to its built-in ${DEFAULT_FLOW} flow until you configure again.`
       }
 
       const draft: Record<string, unknown> = current
@@ -747,7 +778,7 @@ export default async function agentFlowsPlugin(input: any, options: PluginOption
         }
       }
 
-      if (args.title) draft.title = args.title
+      if (args.title !== undefined) draft.title = args.title
       if (args.maxTasksPerRun !== undefined || args.maxConcurrentWorkers !== undefined)
         draft.orchestration = {
           ...(draft.orchestration as Record<string, unknown> | undefined),

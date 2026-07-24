@@ -125,9 +125,14 @@ describe("custom flow end to end", () => {
     expect(config.default_agent).toBe("orchestrator")
   })
 
-  test("selecting the custom flow without a configuration explains how to fix it", async () => {
+  test("selecting the custom flow without a configuration degrades instead of failing", async () => {
+    // Throwing here would unregister every tool, including the flow_configure
+    // the error tells the user to run. Degrade to the built-in flow instead.
     const directory = await stateDir()
-    await expect(plugin({}, { flow: "custom", telemetry: { reportDir: directory } })).rejects.toThrow(/setup skill|flow_configure/)
+    const hooks: any = await plugin({}, { flow: "custom", telemetry: { reportDir: directory } })
+    const view = await hooks.tool.flow_config.execute({})
+    expect(view).toContain("could not be loaded")
+    expect(view).toMatch(/setup skill|flow_configure|flow-setup/)
   })
 
   test("still rejects unknown flow names", async () => {

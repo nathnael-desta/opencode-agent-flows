@@ -70,13 +70,18 @@ export function normalizeProviders(raw: unknown): DiscoveredProvider[] {
       if (!modelId) continue
       const cost = m.cost as { input?: number; output?: number } | undefined
       const limit = m.limit as { context?: number } | undefined
+      // The OpenCode SDK nests these under `capabilities` (reasoning/toolcall);
+      // accept the flat form too for hand-built or older payloads.
+      const capabilities = m.capabilities as { reasoning?: unknown; toolcall?: unknown } | undefined
+      const reasoning = capabilities?.reasoning ?? m.reasoning
+      const toolCall = capabilities?.toolcall ?? m.tool_call
       models.push({
         id: modelId,
         name: typeof m.name === "string" ? m.name : undefined,
         ...(cost ? { cost: { input: cost.input, output: cost.output } } : {}),
         ...(limit ? { limit: { context: limit.context } } : {}),
-        reasoning: typeof m.reasoning === "boolean" ? m.reasoning : undefined,
-        toolCall: typeof m.tool_call === "boolean" ? m.tool_call : undefined,
+        reasoning: typeof reasoning === "boolean" ? reasoning : undefined,
+        toolCall: typeof toolCall === "boolean" ? toolCall : undefined,
       })
     }
     result.push({ id, name: typeof record.name === "string" ? record.name : undefined, models })
@@ -153,6 +158,10 @@ export function rankForRole(
 ): RankedCandidate[] {
   const weighting = roleWeighting(role)
   return candidates
+    // Every role delegates through tools, so a model that cannot call them is
+    // unusable no matter how cheap. Without this, free embedding and TTS models
+    // top the cost-led ranking. Unknown capability is kept, not assumed false.
+    .filter((candidate) => candidate.toolCall !== false)
     .map((candidate) => {
       const billingSource = billingFor(candidate)
       const cost = effectiveCost(candidate.blendedPerMillion, billingSource)

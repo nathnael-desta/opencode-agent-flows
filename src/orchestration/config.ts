@@ -72,7 +72,24 @@ export interface OrchestrationConfig {
 
 export const ORCHESTRATION_CONFIG_VERSION = 1
 
-const MODEL_PATTERN = /^[^/\s]+\/[^/\s]+$/
+/**
+ * provider/model, where the model half may itself contain slashes. Aggregators
+ * such as openrouter, groq, and nvidia namespace their models
+ * (openrouter/anthropic/claude-sonnet-4), and those are over half of the
+ * models.dev catalog, so requiring exactly one slash rejects most real ids.
+ */
+const MODEL_PATTERN = /^[^/\s]+\/\S+$/
+
+/** Clamp a configured budget to a sane integer range. */
+function clampInteger(value: unknown, min: number, max: number): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined
+  return Math.min(max, Math.max(min, Math.round(value)))
+}
+
+function clampRate(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined
+  return Math.min(1, Math.max(0, value))
+}
 
 function normalizeBillingSource(value: unknown): BillingSource | undefined {
   if (typeof value !== "string") return undefined
@@ -121,10 +138,13 @@ export function normalizeOrchestrationConfig(raw: unknown): OrchestrationConfig 
   }
   if (typeof record.title === "string") config.title = record.title
 
+  // Budgets are clamped, not trusted. Left unbounded, a config could remove the
+  // concurrency limit or set maxRounds/maxPacketChars to values that make every
+  // reviewer delegation throw, silently disabling the review gate.
   const orchestration = record.orchestration as Record<string, unknown> | undefined
   if (orchestration) {
-    const maxTasksPerRun = optionalNumber(orchestration.maxTasksPerRun)
-    const maxConcurrentWorkers = optionalNumber(orchestration.maxConcurrentWorkers)
+    const maxTasksPerRun = clampInteger(orchestration.maxTasksPerRun, 1, 50)
+    const maxConcurrentWorkers = clampInteger(orchestration.maxConcurrentWorkers, 1, 8)
     config.orchestration = {
       ...(maxTasksPerRun !== undefined ? { maxTasksPerRun } : {}),
       ...(maxConcurrentWorkers !== undefined ? { maxConcurrentWorkers } : {}),
@@ -133,12 +153,16 @@ export function normalizeOrchestrationConfig(raw: unknown): OrchestrationConfig 
 
   const reviewer = record.reviewer as Record<string, unknown> | undefined
   if (reviewer) {
+    const maxRounds = clampInteger(reviewer.maxRounds, 1, 3)
+    const maxFindings = clampInteger(reviewer.maxFindings, 1, 20)
+    const sampleRate = clampRate(reviewer.sampleRate)
+    const maxPacketChars = clampInteger(reviewer.maxPacketChars, 1_000, 50_000)
     config.reviewer = {
       ...(typeof reviewer.enabled === "boolean" ? { enabled: reviewer.enabled } : {}),
-      ...(optionalNumber(reviewer.maxRounds) !== undefined ? { maxRounds: optionalNumber(reviewer.maxRounds) } : {}),
-      ...(optionalNumber(reviewer.maxFindings) !== undefined ? { maxFindings: optionalNumber(reviewer.maxFindings) } : {}),
-      ...(optionalNumber(reviewer.sampleRate) !== undefined ? { sampleRate: optionalNumber(reviewer.sampleRate) } : {}),
-      ...(optionalNumber(reviewer.maxPacketChars) !== undefined ? { maxPacketChars: optionalNumber(reviewer.maxPacketChars) } : {}),
+      ...(maxRounds !== undefined ? { maxRounds } : {}),
+      ...(maxFindings !== undefined ? { maxFindings } : {}),
+      ...(sampleRate !== undefined ? { sampleRate } : {}),
+      ...(maxPacketChars !== undefined ? { maxPacketChars } : {}),
     }
   }
 

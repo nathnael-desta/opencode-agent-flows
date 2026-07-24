@@ -46,6 +46,18 @@ function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
+/**
+ * Caching is an optimization, never a reason to lose data we already fetched.
+ * An unwritable cache directory must not look like a network outage.
+ */
+async function cacheQuietly<T>(path: string, data: T): Promise<void> {
+  try {
+    await writeCache(path, data)
+  } catch {
+    // Best effort only.
+  }
+}
+
 export interface CatalogResult {
   catalog: ModelCandidate[]
   qualitySource: string
@@ -73,7 +85,7 @@ export async function discoverCatalog(opts: {
   if (!modelsDev) {
     try {
       modelsDev = indexModelsDev(JSON.parse(await fetchText(MODELS_DEV_URL)))
-      await writeCache(modelsDevCache, modelsDev)
+      await cacheQuietly(modelsDevCache, modelsDev)
     } catch (error) {
       modelsDev = await readStaleCache<ModelsDevIndex>(modelsDevCache)
       notes.push(`models.dev unavailable (${message(error)}); ${modelsDev ? "using cached pricing" : "using provider-supplied pricing only"}`)
@@ -87,7 +99,7 @@ export async function discoverCatalog(opts: {
       const parsed = parseArtificialAnalysisHtml(await fetchText(ARTIFICIAL_ANALYSIS_URL))
       if (parsed.length) {
         quality = { live: true, entries: parsed }
-        await writeCache(qualityCache, quality)
+        await cacheQuietly(qualityCache, quality)
       } else {
         notes.push("Artificial Analysis page had no parsable index; using bundled quality snapshot")
         quality = { live: false, entries: QUALITY_SNAPSHOT }

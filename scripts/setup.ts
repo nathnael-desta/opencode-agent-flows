@@ -164,7 +164,7 @@ async function main(): Promise<void> {
       if (!answer) continue
       const numeric = Number(answer)
       const model = Number.isInteger(numeric) && numeric >= 1 && numeric <= ranked.length ? ranked[numeric - 1].model : answer
-      if (!/^[^/\s]+\/[^/\s]+$/.test(model)) {
+      if (!/^[^/\s]+\/\S+$/.test(model)) {
         console.log(`  Skipping ${role}: "${answer}" is not a provider/model value.`)
         continue
       }

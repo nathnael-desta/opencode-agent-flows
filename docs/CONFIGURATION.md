@@ -15,12 +15,20 @@ The `flow` option selects which orchestration to run:
 
 With `"custom"`, the plugin loads
 `~/.local/state/opencode-agent-flows/orchestration-config.json`, written by the
-`/flow-setup` command or `bun run setup`. If that file is missing, startup fails
-with an error telling you to run setup — it does not silently fall back.
+`/flow-setup` command or `bun run setup`.
+
+If that file is missing or invalid, the plugin **degrades to the built-in flow**
+and reports why through `flow_config`. It deliberately does not fail startup:
+refusing to load would unregister every tool, including the `flow_configure`
+you need to repair the configuration.
 
 A generated config binds models, variants, billing sources, and budgets. It
-**cannot** weaken prompts, tool permissions, step budgets, protected paths, or
-escalation approval; those stay owned by the plugin's role templates.
+**cannot** weaken prompts, tool permissions, per-agent step budgets, protected
+paths, or escalation approval; those stay owned by the plugin's role templates.
+Flow-level budgets are **clamped** to sane ranges on load
+(`maxTasksPerRun` 1–50, `maxConcurrentWorkers` 1–8, `maxRounds` 1–3,
+`maxFindings` 1–20, `maxPacketChars` 1,000–50,000, `sampleRate` 0–1), so a
+configuration cannot remove the concurrency limit or silently disable review.
 
 ## Complete Example
 

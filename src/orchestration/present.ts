@@ -42,6 +42,11 @@ export function formatDiscovery(result: CatalogResult, opts?: { role?: Orchestra
   return lines.join("\n")
 }
 
+/** Keep free-form text from breaking the surrounding markdown table. */
+function cell(value: string): string {
+  return value.replace(/\|/g, "\\|").replace(/[\r\n]+/g, " ").trim()
+}
+
 /** Resolve which role a binding is actually inherited from, if any. */
 function inheritedFrom(config: OrchestrationConfig, role: OrchestrationRole): OrchestrationRole | undefined {
   if (config.roles[role]) return undefined
@@ -64,7 +69,7 @@ export function formatOrchestrationConfig(
     ].join("\n")
 
   const lines: string[] = ["# Orchestration configuration"]
-  lines.push(config.title ? `${config.title}` : "Custom orchestration")
+  lines.push(config.title ? cell(config.title) : "Custom orchestration")
   lines.push(
     context.active
       ? "Status: active — the plugin is running this configuration."
@@ -78,8 +83,8 @@ export function formatOrchestrationConfig(
     if (!binding) continue
     const billing = binding.billingSource ?? "unknown"
     const cost = effectiveCost(undefined, billing)
-    const model = `${binding.model}${binding.variant ? ` (${binding.variant})` : ""}${inherited ? ` — inherits ${inherited}` : ""}`
-    lines.push(`| ${role} | ${model} | ${billing} | ${cost.perMillion === 0 ? "~$0/M" : "paper price"} | ${binding.effectiveCostNote ?? ""} |`)
+    const model = cell(`${binding.model}${binding.variant ? ` (${binding.variant})` : ""}${inherited ? ` — inherits ${inherited}` : ""}`)
+    lines.push(`| ${role} | ${model} | ${billing} | ${cost.perMillion === 0 ? "~$0/M" : "paper price"} | ${cell(binding.effectiveCostNote ?? "")} |`)
   }
 
   lines.push(

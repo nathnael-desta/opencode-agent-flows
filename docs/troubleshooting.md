@@ -2,9 +2,15 @@
 
 ## Configuration
 
-**"No orchestration config found at …"**
-You set `"flow": "custom"` without saving a configuration. Run `/flow-setup`
-inside OpenCode or `bun run setup`, or switch back to a built-in flow.
+**"Your configuration could not be loaded…"**
+You set `"flow": "custom"` without a valid configuration, so the plugin fell
+back to the built-in flow and kept all its tools available. `/flow-config` shows
+the reason. Run `/flow-setup`, fix the file, or `flow_configure reset=true` to
+remove a corrupt one — then restart.
+
+**A model id was rejected as not `provider/model`.**
+Ids may contain extra slashes (`openrouter/anthropic/claude-sonnet-4`); those
+are valid. Values with no slash, a leading slash, or whitespace are not.
 
 **"Unknown OpenCode agent flow: …"**
 The `flow` value matches no built-in flow. Valid values are the flows in

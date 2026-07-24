@@ -81,7 +81,13 @@ export function parseArtificialAnalysisHtml(html: string): QualityEntry[] {
     } catch {
       continue
     }
-    for (const node of Array.isArray(parsed) ? parsed : [parsed]) {
+    // Accept a bare node, an array, or a schema.org { "@graph": [...] } wrapper.
+    const nodes = Array.isArray(parsed) ? parsed : [parsed]
+    const graphed = nodes.flatMap((node) => {
+      const graph = (node as { "@graph"?: unknown })?.["@graph"]
+      return Array.isArray(graph) ? graph : [node]
+    })
+    for (const node of graphed) {
       if (typeof node !== "object" || node === null) continue
       const record = node as Record<string, unknown>
       if (record["@type"] !== "Dataset") continue
@@ -96,8 +102,9 @@ export function parseArtificialAnalysisHtml(html: string): QualityEntry[] {
         const index = typeof row.intelligenceIndex === "number" ? row.intelligenceIndex : undefined
         if (label && index !== undefined) entries.push({ label, intelligenceIndex: index })
       }
-      // Prefer the exact flagship index chart; otherwise keep the largest set.
-      if (/^artificial analysis intelligence index$/i.test(name)) return entries
+      // Prefer the exact flagship index chart, but never return an empty set
+      // just because its row keys drifted — a larger sibling chart is better.
+      if (entries.length && /^artificial analysis intelligence index$/i.test(name)) return entries
       if (entries.length > best.length) best = entries
     }
   }
@@ -121,19 +128,23 @@ export function buildQualityIndex(entries: QualityEntry[], live: boolean): Quali
   const source = live ? "artificial-analysis-live" : "artificial-analysis-snapshot"
   return {
     match(modelId, displayName) {
-      const candidates = [modelId, ...(displayName ? [displayName] : [])]
-      for (const candidate of candidates) {
-        // A model id is provider/model; compare on the model portion.
-        const modelPart = candidate.includes("/") ? candidate.slice(candidate.indexOf("/") + 1) : candidate
+      // Exact match only, deliberately.
+      //
+      // A containment fallback looks helpful but is actively harmful here:
+      // every "-mini", "-lite", "-haiku", "-air", "-nano" derivative contains
+      // its flagship's key, so it would inherit the flagship's score. A cheap
+      // small model credited with a frontier index outranks the real flagship
+      // in every role, silently inverting the recommendation this whole system
+      // exists to produce. No quality signal is safer than a wrong one, and
+      // discovery already renders missing scores as "AA n/a".
+      for (const candidate of [modelId, ...(displayName ? [displayName] : [])]) {
+        // A model id is provider/model...; compare on the last path segment,
+        // since aggregators namespace models (openrouter/anthropic/claude-x).
+        const modelPart = candidate.includes("/") ? candidate.slice(candidate.lastIndexOf("/") + 1) : candidate
         const key = qualityKey(modelPart)
         if (!key) continue
         const exact = byKey.get(key)
         if (exact) return { intelligenceIndex: exact.intelligenceIndex, matchedLabel: exact.label, source }
-        // Fall back to containment either direction (handles minor label drift).
-        for (const [entryKey, entry] of byKey) {
-          if (key.length >= 5 && (entryKey.includes(key) || key.includes(entryKey)))
-            return { intelligenceIndex: entry.intelligenceIndex, matchedLabel: entry.label, source }
-        }
       }
       return undefined
     },
