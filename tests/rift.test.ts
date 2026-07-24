@@ -134,14 +134,31 @@ describe("Rift workspace integration", () => {
     const calls: Array<{ command: string; args: string[]; cwd: string }> = []
     const client = new RiftClient("custom-rift", async (command, args, cwd) => {
       calls.push({ command, args, cwd })
-      return { stdout: args[0] === "create" ? "/tmp/rifts/task\n" : "rift 1.0\n", stderr: "" }
+      return { stdout: args[0] === "create" ? "/tmp/rifts/task\n" : "", stderr: "" }
     })
 
-    expect(await client.version("/repo")).toBe("rift 1.0")
+    // Probing uses --help and list; the real CLI has no --version flag.
+    expect(await client.probe("/repo")).toMatchObject({ installed: true, initialized: true })
     expect(await client.create("/repo", "Task A", false)).toBe("/tmp/rifts/task")
     expect(calls).toEqual([
-      { command: "custom-rift", args: ["--version"], cwd: "/repo" },
+      { command: "custom-rift", args: ["--help"], cwd: "/repo" },
+      { command: "custom-rift", args: ["list"], cwd: "/repo" },
       { command: "custom-rift", args: ["create", "--name", "task-a", "--no-hooks"], cwd: "/repo" },
     ])
+  })
+
+  test("probe separates a missing CLI from an uninitialized workspace", async () => {
+    const missing = new RiftClient("custom-rift", async () => {
+      throw Object.assign(new Error("spawn custom-rift ENOENT"), { stderr: "" })
+    })
+    expect(await missing.probe("/repo")).toMatchObject({ installed: false, initialized: false })
+
+    const uninitialized = new RiftClient("custom-rift", async (_command, args) => {
+      if (args[0] === "--help") return { stdout: "Usage: rift <COMMAND>", stderr: "" }
+      throw Object.assign(new Error("exit 1"), { stderr: "no initialized workspace found; run `rift init`" })
+    })
+    const probe = await uninitialized.probe("/repo")
+    expect(probe).toMatchObject({ installed: true, initialized: false })
+    expect(probe.detail).toContain("no initialized workspace found")
   })
 })

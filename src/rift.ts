@@ -5,6 +5,20 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path"
 import { promisify } from "node:util"
 
 const executeFile = promisify(execFile)
+
+export interface RiftProbe {
+  installed: boolean
+  initialized: boolean
+  /** The CLI's own explanation, which is the useful part of a failure. */
+  detail: string
+}
+
+/** Prefer a failed command's stderr; its message is the diagnosis. */
+export function describeProcessError(error: unknown): string {
+  const stderr = (error as { stderr?: unknown })?.stderr
+  if (typeof stderr === "string" && stderr.trim()) return stderr.trim().split(/\r?\n/)[0]
+  return error instanceof Error ? error.message : String(error)
+}
 const EXCLUDED_DIRECTORIES = new Set([
   ".git",
   ".rift",
@@ -184,9 +198,28 @@ export class RiftClient {
     private readonly runner: RiftCommandRunner = defaultRunner,
   ) {}
 
-  async version(cwd: string): Promise<string> {
-    const result = await this.runner(this.command, ["--version"], cwd)
-    return result.stdout.trim() || result.stderr.trim()
+  /**
+   * Report whether the CLI is installed and whether this directory is an
+   * initialized Rift workspace.
+   *
+   * There is deliberately no `--version` call: the real CLI has no such flag
+   * and exits 2 on it, which made a perfectly working install report as
+   * unavailable. `--help` is the availability probe; `list` distinguishes
+   * "installed but not initialized here" and surfaces the actual reason, such
+   * as a filesystem without copy-on-write reflinks.
+   */
+  async probe(cwd: string): Promise<RiftProbe> {
+    try {
+      await this.runner(this.command, ["--help"], cwd)
+    } catch (error) {
+      return { installed: false, initialized: false, detail: describeProcessError(error) }
+    }
+    try {
+      const result = await this.runner(this.command, ["list"], cwd)
+      return { installed: true, initialized: true, detail: result.stdout.trim() || "workspace initialized" }
+    } catch (error) {
+      return { installed: true, initialized: false, detail: describeProcessError(error) }
+    }
   }
 
   async init(cwd: string): Promise<void> {

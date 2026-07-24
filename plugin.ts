@@ -867,11 +867,16 @@ export default async function agentFlowsPlugin(input: any, options: PluginOption
     args: {},
     async execute(_args, context) {
       if (!riftEnabled) return "Rift isolation is disabled. Set rift.enabled to true in the plugin options to enable it."
-      try {
-        return `Rift isolation is enabled: ${(await rift.version(context.directory)) || "version unknown"}. Workspace initialization is checked when flow_rift_begin runs.`
-      } catch (error) {
-        return `Rift isolation is enabled but unavailable: ${error instanceof Error ? error.message : String(error)}`
-      }
+      const probe = await rift.probe(context.directory)
+      if (!probe.installed)
+        return `Rift isolation is enabled but the "${options.rift?.command ?? "rift"}" CLI is not runnable here: ${probe.detail}. Install rift-snapshot, or set rift.enabled to false.`
+      if (!probe.initialized)
+        return [
+          `Rift isolation is enabled and the CLI is installed, but ${context.directory} is not an initialized Rift workspace.`,
+          `Reason: ${probe.detail.replace(/\.?$/, ".")}`,
+          "Run flow_rift_init here (it asks for permission first). Rift needs btrfs, a Linux filesystem with native reflink support, or APFS; on other filesystems initialization fails and isolation cannot be used.",
+        ].join(" ")
+      return `Rift isolation is enabled and ready in ${context.directory}. ${probe.detail}`
     },
   })
 
