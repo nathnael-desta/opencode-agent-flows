@@ -1,0 +1,217 @@
+import type { AgentDefinition, AgentMetadata, FlowDefinition } from "../types.js"
+import type { OrchestrationConfig, OrchestrationRole, RoleBinding } from "./config.js"
+
+/**
+ * A role template owns everything about an orchestration role except which
+ * concrete model backs it: the prompt, permissions, step budget, risk, and
+ * escalation semantics. A generated config only rebinds model/variant/billing,
+ * so a user can never weaken these guardrails through configuration.
+ */
+interface RoleTemplate {
+  description: string
+  mode: "primary" | "subagent"
+  steps: number
+  defaultVariant?: string
+  permission?: AgentDefinition["permission"]
+  prompt?: string
+  role: AgentMetadata["role"]
+  risk: AgentMetadata["risk"]
+  requiresApproval?: boolean
+  /** When the config omits this role, borrow another role's model binding. */
+  fallbackFrom?: OrchestrationRole
+}
+
+const orchestratorPrompt = [
+  "Classify each request before acting.",
+  "When the user asks to inspect, change, or reset orchestration models, use flow_models; explain that persistent model changes take effect after restarting OpenCode.",
+  "Delegate repetitive, low-risk, high-volume transformations that need little judgment to bulk.",
+  "Never use bulk for ambiguous requirements, architecture, security-sensitive work, or difficult debugging.",
+  "Delegate bounded routine implementation, exploration, and fast-path work with clear acceptance criteria to routine.",
+  "Keep routine planning surface-level and cheap: do not inspect implementation files merely to prepare a packet, enumerate expected file edits, design the detailed solution, or predict the diff. The worker owns repository exploration, detailed planning, and implementation choices.",
+  "Routine work packets must stay concise and label Task ID, Objective, Scope, Constraints, Acceptance, Verification, Escalate When, and Return. Reuse the same Task ID for retries and remediation. Scope names the behavior or subsystem, not an exhaustive file list. Treat worker reports without a valid <flow-work-report> as invalid output, but never delegate a separate task solely to repair report formatting.",
+  "Architecture, security, authorization, money, destructive data operations, concurrency, and migrations still go to routine first. Give the worker the risk constraints and require it to stop rather than guess.",
+  "Use deep only when routine returns a concrete failed or blocked result that economical retries cannot responsibly resolve. Before every deep call, explain the evidence to the user and request one-use approval with flow_approve_escalation.",
+  "Before using deep after a worker failure, pass the specific blocker, final diff, and verification evidence so it diagnoses the residue rather than repeats the worker's exploration.",
+  "When a loaded skill asks for Agent or general-purpose subagents, translate that intent to the available task subagent whose role best matches the work.",
+  "Build a small dependency graph for multi-part work. Dispatch up to the configured concurrent limit of independent read-only or rigorously disjoint units in one turn; keep dependent or overlapping writes serial. Integrate a completed frontier before dispatching the next one.",
+  "For code review, use reviewer from a different model family than the implementation worker and disclose when no independent cross-family reviewer is available. Review is a milestone gate over a substantial self-contained changeset, not a per-commit gate. Cheap lint, type, focused-test, and final integrated-test checks are the routine gates.",
+  "Run milestone review when the user explicitly asks, before work leaves the user's hands, when a substantial sampled changeset is selected, or immediately after a self-contained security, authorization, money, secrets, data-integrity, destructive-lifecycle, or migration unit. Do not separately review routine UI, copy, docs, config, or low-risk refactors.",
+  "Give reviewer a compact packet labeled Review Milestone, Acceptance, Change Set, Verification, and Risk. Triage every finding: agree and fix now, or disagree and record a one-line reason. Style and issues already covered by lint, types, or tests are not blockers.",
+  "Review once by default. Re-review only after non-trivial accepted fixes, include Finding Disposition and Non-trivial Fixes in the second packet, and stop after two total rounds. If review is unavailable, disclose it and perform one careful diff self-review instead of silently skipping the gate.",
+  "Treat each delegation as one bounded unit: inspect its result, resolve substantive failures, and stop at the configured task, retry, review, and step budgets.",
+  "Continue until the user's acceptance criteria are met, required verification has passed, a configured budget is reached, or a concrete blocker requires user input; do not merely relay a subagent result.",
+  "Before using extreme-medium or extreme-high, explain why deep is insufficient and ask the user for approval.",
+  "Never use deep merely because a task is long or spans multiple files.",
+  "Prefer the cheapest role whose effective cost and capability fit the work; escalate to a more expensive role only on evidence, not by default.",
+].join(" ")
+
+const reviewerPrompt = [
+  "Review only the supplied milestone acceptance criteria, changeset, relevant snippets, and verification evidence.",
+  "Prioritize correctness, regressions, security, and meaningful missing tests. Ignore style and checks already covered by lint, types, or tests.",
+  "Do not edit files or run shell commands. Return at most five concrete, evidence-backed findings.",
+  "End with exactly one <flow-review> JSON object matching the supplied review contract.",
+].join(" ")
+
+export const ROLE_TEMPLATES: Record<OrchestrationRole, RoleTemplate> = {
+  orchestrator: {
+    description: "Routes work across configured models, delegating cheap-first and escalating only on evidence.",
+    mode: "primary",
+    steps: 30,
+    defaultVariant: "low",
+    permission: { task: { "*": "deny", bulk: "allow", routine: "allow", reviewer: "allow", deep: "allow", "extreme-*": "allow", "flow-*": "allow" } },
+    prompt: orchestratorPrompt,
+    role: "orchestrator",
+    risk: "standard",
+  },
+  bulk: {
+    description: "Handles repetitive, low-risk, token-heavy work with the cheapest capable model.",
+    mode: "subagent",
+    steps: 12,
+    permission: { task: "deny", todowrite: "deny" },
+    role: "bulk-worker",
+    risk: "low",
+    fallbackFrom: "routine",
+  },
+  routine: {
+    description: "Handles bounded routine coding, research, and fast-path work with clear acceptance criteria.",
+    mode: "subagent",
+    steps: 24,
+    defaultVariant: "high",
+    permission: { task: "deny", todowrite: "deny" },
+    role: "worker",
+    risk: "standard",
+  },
+  reviewer: {
+    description: "Independently reviews delegated changes using a compact diff and verification packet.",
+    mode: "subagent",
+    steps: 12,
+    permission: { edit: "deny", bash: "deny", task: "deny", todowrite: "deny" },
+    prompt: reviewerPrompt,
+    role: "reviewer",
+    risk: "low",
+    fallbackFrom: "routine",
+  },
+  deep: {
+    description: "Escalation-only agent for high-risk design or evidence-backed failures after economical work is exhausted.",
+    mode: "subagent",
+    steps: 24,
+    defaultVariant: "high",
+    permission: { task: "deny", todowrite: "deny" },
+    role: "escalation",
+    risk: "high",
+    requiresApproval: true,
+    fallbackFrom: "orchestrator",
+  },
+  "extreme-medium": {
+    description: "Exceptional escalation tier; requires user approval.",
+    mode: "subagent",
+    steps: 30,
+    defaultVariant: "medium",
+    role: "escalation",
+    risk: "high",
+    requiresApproval: true,
+    fallbackFrom: "orchestrator",
+  },
+  "extreme-high": {
+    description: "Highest escalation tier; requires explicit user approval.",
+    mode: "subagent",
+    steps: 30,
+    defaultVariant: "high",
+    role: "escalation",
+    risk: "high",
+    requiresApproval: true,
+    fallbackFrom: "orchestrator",
+  },
+}
+
+/** Resolve a role's binding, falling back to a related role when omitted. */
+function resolveBinding(config: OrchestrationConfig, role: OrchestrationRole): RoleBinding {
+  const direct = config.roles[role]
+  if (direct) return direct
+  const template = ROLE_TEMPLATES[role]
+  if (template.fallbackFrom) return resolveBinding(config, template.fallbackFrom)
+  // orchestrator and routine are guaranteed present by config normalization.
+  throw new Error(`Orchestration config is missing a binding for required role ${role}`)
+}
+
+function buildAgent(template: RoleTemplate, binding: RoleBinding): AgentDefinition {
+  const variant = binding.variant ?? template.defaultVariant
+  return {
+    description: template.description,
+    mode: template.mode,
+    model: binding.model,
+    ...(variant ? { variant } : {}),
+    steps: template.steps,
+    ...(template.permission ? { permission: template.permission } : {}),
+    ...(template.prompt ? { prompt: template.prompt } : {}),
+  }
+}
+
+/**
+ * Build a runnable FlowDefinition from a generated orchestration config. The
+ * role skeleton, prompts, permissions, and safety limits come from the plugin;
+ * only the model/variant/billing bindings come from the config.
+ */
+export function buildFlowFromConfig(config: OrchestrationConfig): FlowDefinition {
+  const agents: Record<string, AgentDefinition> = {}
+  const agentMetadata: Record<string, AgentMetadata> = {}
+  for (const role of Object.keys(ROLE_TEMPLATES) as OrchestrationRole[]) {
+    const template = ROLE_TEMPLATES[role]
+    const binding = resolveBinding(config, role)
+    agents[role] = buildAgent(template, binding)
+    agentMetadata[role] = {
+      role: template.role,
+      billingSource: binding.billingSource ?? "unknown",
+      risk: template.risk,
+      ...(template.requiresApproval ? { requiresApproval: true } : {}),
+    }
+  }
+
+  return {
+    id: "custom",
+    title: config.title ?? "Custom orchestration",
+    summary: "Generated orchestration flow that binds configured models to cheap-first roles with milestone review and evidence-based escalation.",
+    defaultAgent: "orchestrator",
+    baselineAgent: "orchestrator",
+    agents,
+    agentMetadata,
+    routingRules: [
+      "Send repetitive, low-risk, token-heavy transformations to bulk.",
+      "Send bounded routine implementation, exploration, and fast-path work with clear acceptance criteria to routine.",
+      "Send high-risk work to routine first with explicit stop conditions; use deep only for evidence-backed residue after routine fails or blocks.",
+      "Use reviewer selectively for missing or failed verification, high-risk changes, and configured samples.",
+      "When a workflow explicitly requests code review, prefer reviewer and keep the reviewer in a different model family from the implementation worker where possible.",
+    ],
+    escalationRules: [
+      "Do not escalate merely because a task is long or spans multiple files.",
+      "Escalate to deep only after a failed or blocked routine attempt identifies a concrete blocker.",
+      "deep, extreme-medium, and extreme-high require an explicit approval token from the plugin.",
+      "A worker may retry bounded verification failures before escalating.",
+    ],
+    verification: {
+      enabled: true,
+      discoverFromRepository: true,
+      maxWorkerAttempts: 2,
+      fullSuiteRisk: "high",
+    },
+    orchestration: {
+      maxTasksPerRun: config.orchestration?.maxTasksPerRun ?? 12,
+      maxConcurrentWorkers: config.orchestration?.maxConcurrentWorkers ?? 3,
+    },
+    reviewer: {
+      enabled: config.reviewer?.enabled ?? true,
+      agent: "reviewer",
+      triggers: ["explicit", "milestone", "high-risk", "sampled"],
+      sampleRate: config.reviewer?.sampleRate ?? 0.1,
+      maxRounds: config.reviewer?.maxRounds ?? 2,
+      maxFindings: config.reviewer?.maxFindings ?? 5,
+      maxPacketChars: config.reviewer?.maxPacketChars ?? 12_000,
+    },
+    limitations: [
+      "Subscription and bundle capacity is not token-metered, so effective-cost savings remain estimated.",
+      "Task-to-child-session linking is correlated when OpenCode does not expose an explicit relationship.",
+      "Model review is evidence, not ground truth.",
+      "Cross-family review selection is prompt-enforced; user model bindings can make an independent reviewer unavailable.",
+    ],
+  }
+}

@@ -2,7 +2,9 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import { tool } from "@opencode-ai/plugin"
 import { flows } from "./src/flows/index.js"
-import type { AgentDefinition, AgentMetadata, OpenCodeConfig, PluginOptions } from "./src/types.js"
+import { loadOrchestrationConfig } from "./src/orchestration/config.js"
+import { buildFlowFromConfig } from "./src/orchestration/roles.js"
+import type { AgentDefinition, AgentMetadata, FlowDefinition, OpenCodeConfig, PluginOptions } from "./src/types.js"
 import { expandPath, defaultTelemetryDirectory } from "./src/telemetry/path.js"
 import { normalizePricing } from "./src/telemetry/pricing.js"
 import { commandCodeBudget, readCodexQuota } from "./src/telemetry/quota.js"
@@ -332,11 +334,19 @@ function evaluatorAgent(baseline: AgentDefinition, instruction: string, source: 
   }
 }
 
+async function resolveFlow(name: string | undefined, orchestrationConfigPath: string): Promise<FlowDefinition> {
+  const selected = name ?? "openai-commandcode-router"
+  if (selected === "custom") return buildFlowFromConfig(await loadOrchestrationConfig(orchestrationConfigPath))
+  const flow = flows[selected]
+  if (!flow) throw new Error(`Unknown OpenCode agent flow: ${name}. Available: ${Object.keys(flows).join(", ")}, custom`)
+  return flow
+}
+
 export default async function agentFlowsPlugin(input: any, options: PluginOptions = {}) {
-  const flow = flows[options.flow ?? "openai-commandcode-router"]
-  if (!flow) throw new Error(`Unknown OpenCode agent flow: ${options.flow}`)
   const telemetryOptions = options.telemetry ?? {}
   const reportDirectory = expandPath(telemetryOptions.reportDir ?? options.usageReportDir ?? defaultTelemetryDirectory())
+  const orchestrationConfigPath = join(reportDirectory, "orchestration-config.json")
+  const flow = await resolveFlow(options.flow, orchestrationConfigPath)
   const store = new TelemetryStore(reportDirectory, {
     dashboard: telemetryOptions.dashboard,
     retentionDays: telemetryOptions.retentionDays,
