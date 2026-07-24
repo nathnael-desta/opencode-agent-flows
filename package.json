@@ -10,8 +10,10 @@
   "files": [
     "plugin.ts",
     "src/**/*.ts",
+    "scripts/",
     "docs/",
-    "examples/"
+    "examples/",
+    "AGENTS.md"
   ],
   "scripts": {
     "docs": "bun scripts/generate-docs.ts",
