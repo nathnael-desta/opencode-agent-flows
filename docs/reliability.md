@@ -66,11 +66,6 @@ concurrency limit, integrate the completed frontier, then dispatch the next.
 Read-only or rigorously disjoint units may run together. Dependent or
 overlapping writes stay serial.
 
-> [!WARNING]
-> When [Rift](rift.md) is enabled, ordinary shared-checkout concurrent writers
-> are **rejected**. Concurrent writers must use isolated Rift tasks. There is no
-> silent fallback to unsafe concurrent writes.
-
 ## Cheap-first escalation
 
 Escalation is a technical gate, not a suggestion:

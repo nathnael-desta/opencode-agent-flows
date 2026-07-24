@@ -113,13 +113,6 @@ export interface OrchestrationOptions {
   maxConcurrentWorkers?: number
 }
 
-export interface RiftOptions {
-  enabled?: boolean
-  command?: string
-  runHooks?: boolean
-  retainWorkspaces?: boolean
-}
-
 export interface QuotaOptions {
   codex?: boolean
   refreshMs?: number
@@ -140,7 +133,6 @@ export interface PluginOptions {
   verification?: VerificationOptions
   reviewer?: ReviewerOptions
   orchestration?: OrchestrationOptions
-  rift?: RiftOptions
   quota?: QuotaOptions
   guardrails?: GuardrailOptions
 

@@ -43,9 +43,7 @@ Reports distinguish `invalid-output` from ordinary failures, so a formatting
 problem is never conflated with a substantive one.
 
 Session task history is rebuilt from persisted run reports, so restarting the
-plugin no longer erases prior task totals. Isolated [Rift](rift.md) session
-usage is captured **before** those workspaces are removed.
-
+plugin no longer erases prior task totals. 
 The report schema is **version 4**, with compatibility handling for older
 totals.
 

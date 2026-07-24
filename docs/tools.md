@@ -135,17 +135,3 @@ Escalation to `deep` or `extreme-*` is blocked until you approve it. Approval is
 `deep` additionally requires that the run already contains a concrete failed or
 blocked `routine` result. Being long or touching many files is not evidence.
 
-## Rift isolation
-
-Only the root orchestrator may call these, and only when `rift.enabled` is set.
-
-| Tool | Purpose |
-|---|---|
-| `flow_rift_status` | Whether Rift is available |
-| `flow_rift_init` | Initialize (permission-gated; can alter workspace layout) |
-| `flow_rift_begin` | Snapshot one immutable baseline of the dirty workspace |
-| `flow_rift_task` | Run one worker in an isolated snapshot |
-| `flow_rift_integrate` | Guarded central integration of completed workers |
-| `flow_rift_cleanup` | Discard unintegrated snapshots |
-
-See [Rift isolation](rift.md).

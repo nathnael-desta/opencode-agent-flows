@@ -73,12 +73,6 @@ configuration cannot remove the concurrency limit or silently disable review.
       "maxFindings": 5,
       "maxPacketChars": 12000
     },
-    "rift": {
-      "enabled": false,
-      "command": "rift",
-      "runHooks": false,
-      "retainWorkspaces": false
-    },
     "guardrails": {
       "enabled": true,
       "protectedPaths": [
@@ -111,30 +105,9 @@ configuration cannot remove the concurrency limit or silently disable review.
 - Dynamic verification guidance is enabled.
 - Runs are capped at 12 delegated tasks and 3 concurrent workers.
 - Reviewer output is capped at 5 findings and 2 milestone rounds.
-- Rift isolation is disabled until explicitly enabled on a supported filesystem.
 - Automatic verification command execution is not implemented.
 - Guardrails are enabled with conservative protected-path defaults.
 - Medium and high escalation agents require permission approval.
-
-## Rift Isolation
-
-Set `rift.enabled` only after installing `rift-snapshot` and initializing the
-repository on btrfs, a Linux filesystem with native reflinks, or APFS. The
-plugin never initializes Rift automatically because `rift init` may convert a
-btrfs directory into a subvolume. `flow_rift_init` always opens an explicit
-permission prompt.
-
-When enabled, the orchestrator uses:
-
-- `flow_rift_begin` to snapshot the exact dirty session baseline.
-- Concurrent `flow_rift_task` calls for independent writers.
-- `flow_rift_integrate` for guarded central integration.
-- `flow_rift_cleanup` to discard unintegrated snapshots.
-
-Integration rejects undeclared worker changes, conflicting worker outputs, and
-any live source file changed after the baseline. Post-create hooks are disabled
-by default; set `runHooks` only for trusted project configuration. Windows is
-not currently supported by Rift workspace creation.
 
 ## Developer Experiments
 
@@ -229,6 +202,6 @@ Everything persistent lives under the telemetry report directory
 | `model-overrides.json` | Per-agent model overrides from `flow_models` |
 | `developer-mode.json` | Developer evaluation settings |
 | `cache/models-dev.json` | models.dev pricing cache (24h) |
-| `cache/artificial-analysis.json` | Quality index cache (24h) |
+| `cache/model-quality.json` | Quality index cache (24h) |
 | `runs/`, `sessions/`, `global.json` | Telemetry reports |
 | `dashboard.html` | Self-contained dashboard |

@@ -25,8 +25,6 @@ import { buildFlowReport } from "./src/telemetry/reports.js"
 import { TelemetryStore } from "./src/telemetry/store.js"
 import type { DeveloperModeSnapshot, QualityEvidence, ReviewReport, TaskTrace, VerificationEvidence, WorkReport } from "./src/telemetry/types.js"
 import { flowReportMarkdown, globalReportMarkdown } from "./src/telemetry/markdown.js"
-import { integrateRiftWorkers, RiftClient, workspaceManifest } from "./src/rift.js"
-import type { RiftWorkerResult, WorkspaceManifest } from "./src/rift.js"
 
 interface RunState {
   id: string
@@ -36,14 +34,6 @@ interface RunState {
 interface SessionInfo {
   id: string
   parentID?: string
-}
-interface RiftRunState {
-  runID: string
-  source: string
-  baselinePath: string
-  baseline: WorkspaceManifest
-  workers: Map<string, RiftWorkerResult>
-  workspaces: Set<string>
 }
 interface RawMessage {
   id?: string
@@ -433,22 +423,14 @@ export default async function agentFlowsPlugin(input: any, options: PluginOption
     : undefined
   const activeRuns = new Map<string, RunState>()
   const sessionAgents = new Map<string, string>()
-  const isolatedSessionRoots = new Map<string, string>()
-  const isolatedSessionDirectories = new Map<string, string>()
-  const isolatedSessionMessages = new Map<string, ReturnType<typeof normalizeMessage>[]>()
   const tasks = new Map<string, TaskTrace>()
   const taskAttempts = new Map<string, number>()
   const verification: VerificationEvidence[] = []
   const quality: QualityEvidence[] = []
   const approvals = new Map<string, Set<string>>()
-  const riftEnabled = options.rift?.enabled === true
-  const rift = new RiftClient(options.rift?.command ?? "rift")
-  const riftRuns = new Map<string, RiftRunState>()
   const shadowedAgents: string[] = []
 
   async function resolveRoot(sessionID: string): Promise<SessionInfo | undefined> {
-    const isolatedRoot = isolatedSessionRoots.get(sessionID)
-    if (isolatedRoot) return (await input.client?.session?.get({ path: { id: isolatedRoot } }))?.data as SessionInfo | undefined
     let session = (await input.client?.session?.get({ path: { id: sessionID } }))?.data as SessionInfo | undefined
     while (session?.parentID) session = (await input.client.session.get({ path: { id: session.parentID } })).data as SessionInfo | undefined
     return session
@@ -465,15 +447,9 @@ export default async function agentFlowsPlugin(input: any, options: PluginOption
         ).data ?? []
       sessions.push(...children)
     }
-    for (const [sessionID, rootID] of isolatedSessionRoots) {
-      if (rootID === root.id && !sessions.some((session) => session.id === sessionID)) sessions.push({ id: sessionID, parentID: root.id })
-    }
     return Promise.all(
       sessions.map(async (session) => {
-        const isolatedMessages = isolatedSessionMessages.get(session.id)
-        if (isolatedMessages) return { id: session.id, parentID: session.parentID, agent: sessionAgents.get(session.id), messages: isolatedMessages }
-        const directory = isolatedSessionDirectories.get(session.id)
-        const data = (await input.client.session.messages({ path: { id: session.id }, ...(directory ? { query: { directory } } : {}) })).data ?? []
+        const data = (await input.client.session.messages({ path: { id: session.id } })).data ?? []
         const messages = data.map((item: { info: RawMessage }) => normalizeMessage(item.info))
         const agent = messages.find((message: { role: string; agent?: string }) => message.role === "user")?.agent ?? sessionAgents.get(session.id)
         if (agent) sessionAgents.set(session.id, agent)
@@ -554,12 +530,6 @@ export default async function agentFlowsPlugin(input: any, options: PluginOption
             duration: 8_000,
           },
         })
-      for (const [sessionID, rootID] of isolatedSessionRoots) {
-        if (rootID !== rootSessionID) continue
-        isolatedSessionRoots.delete(sessionID)
-        isolatedSessionDirectories.delete(sessionID)
-        isolatedSessionMessages.delete(sessionID)
-      }
     } catch (error) {
       console.warn("Failed to finalize agent flow telemetry", error)
     }
@@ -586,13 +556,6 @@ export default async function agentFlowsPlugin(input: any, options: PluginOption
       sampled
         ? "This run was selected for sampled review if it produces a substantial self-contained changeset."
         : "This run was not selected for sampled review; explicit requests, final handoff milestones, and self-contained high-risk units still qualify.",
-    ]
-  }
-
-  function riftInstructions(): string[] {
-    if (!riftEnabled) return []
-    return [
-      "Rift isolation is enabled. Before parallel writer tasks, call flow_rift_begin once, dispatch independent flow_rift_task calls concurrently, then call flow_rift_integrate with the completed stable Task IDs. Never use ordinary task calls for concurrent writers. Rift integration refuses undeclared files, worker conflicts, and source files changed after the session baseline.",
     ]
   }
 
@@ -866,195 +829,6 @@ export default async function agentFlowsPlugin(input: any, options: PluginOption
     },
   })
 
-  const riftStatusTool = tool({
-    description: "Check whether the opt-in Rift isolation backend is enabled and available for this workspace.",
-    args: {},
-    async execute(_args, context) {
-      if (!riftEnabled) return "Rift isolation is disabled. Set rift.enabled to true in the plugin options to enable it."
-      const probe = await rift.probe(context.directory)
-      if (!probe.installed)
-        return `Rift isolation is enabled but the "${options.rift?.command ?? "rift"}" CLI is not runnable here: ${probe.detail}. Install rift-snapshot, or set rift.enabled to false.`
-      if (!probe.initialized)
-        return [
-          `Rift isolation is enabled and the CLI is installed, but ${context.directory} is not an initialized Rift workspace.`,
-          `Reason: ${probe.detail.replace(/\.?$/, ".")}`,
-          "Run flow_rift_init here (it asks for permission first). Rift needs btrfs, a Linux filesystem with native reflink support, or APFS; on other filesystems initialization fails and isolation cannot be used.",
-        ].join(" ")
-      return `Rift isolation is enabled and ready in ${context.directory}. ${probe.detail}`
-    },
-  })
-
-  const riftInitTool = tool({
-    description: "Initialize the current repository for Rift after an explicit permission prompt. This can convert a btrfs directory into a subvolume.",
-    args: {},
-    async execute(_args, context) {
-      if (!riftEnabled) throw new Error("Rift isolation is disabled")
-      await context.ask({
-        permission: "flow_rift_init",
-        patterns: [context.directory],
-        always: [],
-        metadata: { flow: flow.id, directory: context.directory },
-      })
-      await rift.init(context.directory)
-      return `Initialized Rift at ${context.directory}.`
-    },
-  })
-
-  const riftBeginTool = tool({
-    description: "Create one immutable Rift baseline containing the current staged, unstaged, and untracked workspace state before parallel writers run.",
-    args: {},
-    async execute(_args, context) {
-      if (!riftEnabled) throw new Error("Rift isolation is disabled")
-      const root = await resolveRoot(context.sessionID)
-      const run = root ? activeRuns.get(root.id) : undefined
-      if (!root || !run) throw new Error("Rift isolation requires an active root flow run")
-      const existing = riftRuns.get(root.id)
-      if (existing?.runID === run.id) return `Rift baseline already exists at ${existing.baselinePath}.`
-      if (existing) throw new Error("A Rift baseline from a previous run is still active; integrate it or call flow_rift_cleanup before starting another")
-      try {
-        await readFile(join(context.directory, ".rift"), "utf8")
-      } catch {
-        throw new Error(`Rift root marker not found at ${context.directory}; run flow_rift_init there before creating a baseline`)
-      }
-      const baselinePath = await rift.create(context.directory, `flow-${run.id}-baseline`, false)
-      riftRuns.set(root.id, {
-        runID: run.id,
-        source: context.directory,
-        baselinePath,
-        baseline: await workspaceManifest(baselinePath),
-        workers: new Map(),
-        workspaces: new Set(),
-      })
-      return `Created immutable Rift baseline at ${baselinePath}. Dispatch independent flow_rift_task calls, then integrate their stable Task IDs with flow_rift_integrate.`
-    },
-  })
-
-  const riftTaskTool = tool({
-    description: "Run one routine or bulk worker in a child Rift snapshot. Independent calls may run concurrently after flow_rift_begin.",
-    args: {
-      task_id: tool.schema.string().min(1).max(100),
-      subagent_type: tool.schema.enum(["routine", "bulk"]),
-      description: tool.schema.string().min(1).max(MAX_WORK_PACKET_CHARS),
-    },
-    async execute(args, context) {
-      if (!riftEnabled) throw new Error("Rift isolation is disabled")
-      const root = await resolveRoot(context.sessionID)
-      const state = root ? riftRuns.get(root.id) : undefined
-      if (!root || !state) throw new Error("Call flow_rift_begin before flow_rift_task")
-      const taskID = stableTaskID(`Task ID: ${args.task_id}`)
-      if (state.workers.has(taskID)) throw new Error(`Rift task ${taskID} already completed`)
-      const workspace = await rift.create(state.baselinePath, `${state.runID}-${taskID}`, options.rift?.runHooks === true)
-      state.workspaces.add(workspace)
-      const trace = [...tasks.values()].find((task) => task.runID === activeRuns.get(root.id)?.id && task.taskID === taskID && task.status === "running")
-      if (trace) trace.workspace = workspace
-      let isolatedSessionID: string | undefined
-      try {
-        const session = (
-          await input.client.session.create({
-            query: { directory: workspace },
-            body: { title: `${taskID} (@${args.subagent_type} Rift worker)` },
-          })
-        ).data
-        if (!session?.id) throw new Error("OpenCode did not create a Rift worker session")
-        isolatedSessionID = session.id
-        sessionAgents.set(session.id, args.subagent_type)
-        isolatedSessionRoots.set(session.id, root.id)
-        isolatedSessionDirectories.set(session.id, workspace)
-        const response = (
-          await input.client.session.prompt({
-            query: { directory: workspace },
-            path: { id: session.id },
-            body: {
-              agent: args.subagent_type,
-              parts: [{ type: "text", text: args.description }],
-            },
-          })
-        ).data
-        if (response?.info) isolatedSessionMessages.set(session.id, [normalizeMessage(response.info as RawMessage)])
-        const output = (response?.parts ?? [])
-          .filter((part: { type?: string; text?: string }) => part.type === "text" && typeof part.text === "string")
-          .map((part: { text: string }) => part.text)
-          .join("\n")
-        if (!output.trim()) throw new Error(errorText(response?.info?.error) ?? "Rift worker returned empty output")
-        const report = parseWorkReport(output)
-        if (report.report) {
-          state.workers.set(taskID, {
-            taskID,
-            workspace,
-            manifest: await workspaceManifest(workspace),
-            declaredFiles: report.report.filesChanged,
-          })
-        }
-        return `${output}\n\n[Rift workspace: ${workspace}; Task ID: ${taskID}]`
-      } catch (error) {
-        if (isolatedSessionID) {
-          isolatedSessionRoots.delete(isolatedSessionID)
-          isolatedSessionDirectories.delete(isolatedSessionID)
-          isolatedSessionMessages.delete(isolatedSessionID)
-        }
-        if (!options.rift?.retainWorkspaces) {
-          await rift.remove(workspace).catch(() => undefined)
-          state.workspaces.delete(workspace)
-        }
-        throw error
-      }
-    },
-  })
-
-  const riftIntegrateTool = tool({
-    description: "Centrally integrate completed Rift workers after validating declared files, cross-worker conflicts, and source changes since the baseline.",
-    args: { task_ids: tool.schema.array(tool.schema.string()).min(1) },
-    async execute(args, context) {
-      if (!riftEnabled) throw new Error("Rift isolation is disabled")
-      const root = await resolveRoot(context.sessionID)
-      const state = root ? riftRuns.get(root.id) : undefined
-      if (!root || !state) throw new Error("No active Rift baseline exists")
-      const selected = args.task_ids.map((value) => {
-        const taskID = stableTaskID(`Task ID: ${value}`)
-        const worker = state.workers.get(taskID)
-        if (!worker) throw new Error(`Rift task ${taskID} is not ready for integration`)
-        return worker
-      })
-      const changed = await integrateRiftWorkers({ source: state.source, baseline: state.baseline, workers: selected })
-      const cleanupErrors: string[] = []
-      if (!options.rift?.retainWorkspaces) {
-        for (const worker of selected) {
-          try {
-            await rift.remove(worker.workspace)
-            state.workers.delete(worker.taskID)
-            state.workspaces.delete(worker.workspace)
-          } catch (error) {
-            cleanupErrors.push(`${worker.workspace}: ${error instanceof Error ? error.message : String(error)}`)
-          }
-        }
-        if (state.workers.size === 0) {
-          try {
-            await rift.remove(state.baselinePath)
-            riftRuns.delete(root.id)
-          } catch (error) {
-            cleanupErrors.push(`${state.baselinePath}: ${error instanceof Error ? error.message : String(error)}`)
-          }
-        }
-      }
-      return `Integrated ${selected.length} Rift task(s): ${changed.join(", ") || "no file changes"}. Run deterministic checks on the combined live workspace before milestone review.${cleanupErrors.length > 0 ? ` Cleanup requires attention: ${cleanupErrors.join("; ")}` : ""}`
-    },
-  })
-
-  const riftCleanupTool = tool({
-    description: "Remove the active run's Rift worker snapshots and baseline without integrating them, then garbage-collect Rift trash.",
-    args: {},
-    async execute(_args, context) {
-      const root = await resolveRoot(context.sessionID)
-      const state = root ? riftRuns.get(root.id) : undefined
-      if (!root || !state) return "No active Rift workspaces exist for this run."
-      for (const workspace of state.workspaces) await rift.remove(workspace)
-      await rift.remove(state.baselinePath)
-      await rift.gc(state.source)
-      riftRuns.delete(root.id)
-      return "Removed the active run's Rift workspaces."
-    },
-  })
-
   const hooks: any = {
     config: async (config: OpenCodeConfig) => {
       config.agent ??= {}
@@ -1109,12 +883,6 @@ export default async function agentFlowsPlugin(input: any, options: PluginOption
       flow_discover_models: discoverTool,
       flow_config: configViewTool,
       flow_configure: configureTool,
-      flow_rift_status: riftStatusTool,
-      flow_rift_init: riftInitTool,
-      flow_rift_begin: riftBeginTool,
-      flow_rift_task: riftTaskTool,
-      flow_rift_integrate: riftIntegrateTool,
-      flow_rift_cleanup: riftCleanupTool,
     },
     "chat.message": async (chatInput: { sessionID: string; agent?: string; messageID?: string }, output: { message: RawMessage }) => {
       if (chatInput.agent) sessionAgents.set(chatInput.sessionID, chatInput.agent)
@@ -1129,18 +897,16 @@ export default async function agentFlowsPlugin(input: any, options: PluginOption
     "experimental.chat.system.transform": async (systemInput: { sessionID?: string }, output: { system: string[] }) => {
       if (!systemInput.sessionID) return
       const root = await resolveRoot(systemInput.sessionID)
-      if (root && root.id === systemInput.sessionID) output.system.push(...developerInstructions(root.id), ...reviewerInstructions(root.id), ...riftInstructions())
+      if (root && root.id === systemInput.sessionID) output.system.push(...developerInstructions(root.id), ...reviewerInstructions(root.id))
     },
     "tool.execute.before": async (toolInput: { tool: string; sessionID: string; callID: string }, output: { args: Record<string, unknown> }) => {
       const root = await resolveRoot(toolInput.sessionID)
       const run = root ? activeRuns.get(root.id) : undefined
       const agent = sessionAgents.get(toolInput.sessionID)
       const role = agent ? metadata[agent]?.role : undefined
-      if (toolInput.tool.startsWith("flow_rift_") && role !== "orchestrator") throw new Error(`Only the root orchestrator can use ${toolInput.tool}`)
       if ((role === "evaluator" || role === "reviewer") && ["edit", "write", "apply_patch", "bash", "task"].includes(toolInput.tool))
         throw new Error(`${role === "reviewer" ? "Reviewer" : "Evaluator"} ${agent} is read-only and cannot use ${toolInput.tool}`)
-      if (toolInput.tool === "task" || toolInput.tool === "flow_rift_task") {
-        const isolated = toolInput.tool === "flow_rift_task"
+      if (toolInput.tool === "task") {
         const delegated = String(output.args.subagent_type ?? output.args.agent ?? "unknown")
         const description = typeof output.args.description === "string" ? output.args.description : ""
         const delegatedRole = metadata[delegated]?.role
@@ -1149,8 +915,6 @@ export default async function agentFlowsPlugin(input: any, options: PluginOption
           throw new Error(`run reached the ${orchestrationPolicy.maxTasksPerRun}-task delegation budget; return a partial result or ask the user`)
         if (agent === flow.defaultAgent && (delegatedRole === "worker" || delegatedRole === "bulk-worker")) {
           const runningWorkers = runTasks.filter((task) => task.status === "running" && ["worker", "bulk-worker"].includes(metadata[task.agent ?? ""]?.role ?? "")).length
-          if (riftEnabled && !isolated && runningWorkers > 0)
-            throw new Error("Rift-enabled runs cannot launch concurrent writers through the shared task tool; use flow_rift_task")
           if (runningWorkers >= orchestrationPolicy.maxConcurrentWorkers)
             throw new Error(`run reached the ${orchestrationPolicy.maxConcurrentWorkers}-worker concurrency limit; integrate the current frontier first`)
           if (delegatedRole === "worker" && description.length > MAX_WORK_PACKET_CHARS)
@@ -1179,7 +943,7 @@ export default async function agentFlowsPlugin(input: any, options: PluginOption
             output.args.description = `${description}${REVIEW_REPORT_CONTRACT.replace("{MAX_FINDINGS}", String(reviewerPolicy.maxFindings))}`
         }
         const packetDescription = typeof output.args.description === "string" ? output.args.description : description
-        const taskID = isolated ? stableTaskID(`Task ID: ${String(output.args.task_id ?? "unknown")}`) : stableTaskID(description)
+        const taskID = stableTaskID(description)
         if (runTasks.some((task) => task.status === "running" && task.agent === delegated && task.taskID === taskID))
           throw new Error(`task ${taskID} is already running; do not launch duplicate concurrent attempts`)
         if (run && (delegatedRole === "worker" || delegatedRole === "bulk-worker")) {
@@ -1199,7 +963,6 @@ export default async function agentFlowsPlugin(input: any, options: PluginOption
           agent: delegated,
           description: packetDescription,
           model: runtimeFlow.agents[delegated]?.model,
-          workspace: isolated ? "pending Rift workspace" : undefined,
           status: "running",
           startedAt: Date.now(),
           linkConfidence: "explicit",

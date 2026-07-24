@@ -60,7 +60,6 @@ Read [Effective cost](effective-cost.md).
 - **Milestone review** as a gate, not a per-commit tax.
 - **Hard budgets**: task, concurrency, retry, review, and agent-step limits.
 - **Telemetry**: run/session/global reports plus an HTML dashboard.
-- **Optional [Rift isolation](rift.md)** for safe parallel writers.
 
 ## Quick start
 

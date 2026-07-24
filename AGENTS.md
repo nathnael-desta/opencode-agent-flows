@@ -37,7 +37,6 @@ bun run setup    # interactive terminal setup for the orchestration config
 | `src/flows/` | Declarative built-in `FlowDefinition`s |
 | `src/orchestration/` | Data-driven custom flow: config, role templates, discovery, economics, quality |
 | `src/telemetry/` | Run/session/global reports, pricing, quota, dashboard |
-| `src/rift.ts` | Opt-in copy-on-write workspace isolation for parallel writers |
 | `scripts/` | `generate-docs.ts`, `setup.ts` |
 | `docs/` | Docsify site; `docs/flows/*.md` is generated, not hand-edited |
 

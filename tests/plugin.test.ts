@@ -230,57 +230,6 @@ describe("agent flows plugin", () => {
     )).rejects.toThrow("matched auth")
   })
 
-  test("runs and integrates an isolated worker through the Rift tools", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "agent-flow-rift-plugin-"))
-    const storage = await mkdtemp(join(tmpdir(), "agent-flow-rift-storage-"))
-    temporaryDirectories.push(directory, storage)
-    await writeFile(join(directory, "base.txt"), "dirty user state")
-    await writeFile(join(directory, ".rift"), "test-root")
-    const executable = join(storage, "fake-rift")
-    await writeFile(executable, `#!/bin/sh
-set -eu
-case "$1" in
-  create)
-    destination="${storage}/$3"
-    mkdir -p "$destination"
-    cp -a "$PWD/." "$destination/"
-    printf '%s\\n' "$destination"
-    ;;
-  remove)
-    target="$PWD"
-    cd /
-    rm -rf "$target"
-    ;;
-  gc|init) ;;
-  --version) printf 'rift-test 1.0\\n' ;;
-esac
-`)
-    await chmod(executable, 0o755)
-
-    const sessions = {
-      get: async ({ path }: { path: { id: string } }) => ({ data: path.id === "rift-child" ? { id: "rift-child", parentID: "root" } : { id: "root" } }),
-      children: async () => ({ data: [] }),
-      messages: async () => ({ data: [] }),
-      create: async () => ({ data: { id: "rift-child" } }),
-      prompt: async ({ query }: { query: { directory: string } }) => {
-        await writeFile(join(query.directory, "worker.txt"), "isolated output")
-        return { data: { parts: [{ type: "text", text: '<flow-work-report>{"status":"completed","summary":"isolated","filesChanged":["worker.txt"],"verification":[],"scopeChanges":[]}</flow-work-report>' }] } }
-      },
-    }
-    const hooks: any = await plugin({ client: { session: sessions } }, { rift: { enabled: true, command: executable } })
-    await hooks["chat.message"]?.({ sessionID: "root", agent: "orchestrator", messageID: "run" }, { message: { id: "run", role: "user", time: { created: Date.now() } } })
-    const context = { sessionID: "root", messageID: "message", agent: "orchestrator", directory, worktree: directory, abort: new AbortController().signal, metadata() {}, async ask() {} }
-    await hooks.tool.flow_rift_begin.execute({}, context)
-    const args = { task_id: "isolated-worker", subagent_type: "routine", description: workPacket }
-    await hooks["tool.execute.before"]?.({ tool: "flow_rift_task", sessionID: "root", callID: "rift-task" }, { args })
-    const output = { output: await hooks.tool.flow_rift_task.execute(args, context) }
-    await hooks["tool.execute.after"]?.({ callID: "rift-task" }, output)
-    await hooks.tool.flow_rift_integrate.execute({ task_ids: ["isolated-worker"] }, context)
-
-    expect(await readFile(join(directory, "worker.txt"), "utf8")).toBe("isolated output")
-    expect(await readFile(join(directory, "base.txt"), "utf8")).toBe("dirty user state")
-  })
-
   test("caps routine packets and flags malformed worker reports", async () => {
     const hooks: any = await plugin({
       client: { session: { get: async () => ({ data: { id: "root" } }), children: async () => ({ data: [] }), messages: async () => ({ data: [] }) } },
@@ -355,12 +304,4 @@ esac
     ).rejects.toThrow("read-only")
   })
 
-  test("reserves Rift lifecycle tools for the root orchestrator", async () => {
-    const hooks: any = await plugin({ client: client() }, { rift: { enabled: true } })
-    await hooks["chat.message"]?.({ sessionID: "child", agent: "routine", messageID: "worker" }, { message: { id: "worker", role: "user", time: { created: Date.now() } } })
-    await expect(hooks["tool.execute.before"]?.(
-      { tool: "flow_rift_begin", sessionID: "child", callID: "rift" },
-      { args: {} },
-    )).rejects.toThrow("Only the root orchestrator")
-  })
 })

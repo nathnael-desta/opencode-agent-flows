@@ -16,7 +16,6 @@
   - [Architecture](architecture.md)
   - [Reliability and budgets](reliability.md)
   - [Milestone review](review.md)
-  - [Rift isolation](rift.md)
   - [Telemetry and reports](telemetry.md)
 
 - Flows

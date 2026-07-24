@@ -94,23 +94,6 @@ Configuration:
       one diff self-review without an output-format retry.
 - [ ] Compare reviewer cost with worker cost for at least ten tasks.
 
-## Rift-Isolated Writers
-
-- [ ] Use `flow_rift_status` on a supported filesystem.
-- [ ] Confirm `flow_rift_init` opens a permission prompt before modifying the
-      workspace layout.
-- [ ] Start from staged, unstaged, and untracked changes; call `flow_rift_begin`;
-      confirm the baseline preserves all three.
-- [ ] Run two disjoint `flow_rift_task` calls concurrently and integrate them.
-- [ ] Confirm neither worker modifies the live checkout before integration.
-- [ ] Confirm undeclared worker files and overlapping worker edits are rejected.
-- [ ] Edit a live source file after the baseline and confirm integration refuses
-      to overwrite it.
-- [ ] Confirm absolute or workspace-escaping symlinks are rejected.
-- [ ] Confirm unsupported filesystems fail explicitly without shared-writer
-      fallback.
-- [ ] Run combined deterministic checks after integration, then milestone review.
-
 ## Developer Evaluation Modes
 
 - [ ] Set `developer.enabled` to `true` with a fixed sample salt.

@@ -35,12 +35,10 @@ One page listing every capability, with where to read more.
 | Reviewer isolation | Cannot edit, run shell, or delegate — enforced, not asked | [Milestone review](review.md#reviewer-isolation) |
 | Developer experiments | Shadow planners and blind audit reviewers on a sample | [Telemetry](telemetry.md#feedback-and-experiments) |
 
-## Isolation and reporting
+## Reporting
 
 | Capability | What it gives you | More |
 |---|---|---|
-| Rift isolation | Copy-on-write snapshots for safe parallel writers | [Rift](rift.md) |
-| Guarded integration | Rejects undeclared, conflicting, and stale changes | [Rift](rift.md#integration-safeguards) |
 | Run/session/global reports | Markdown plus a self-contained HTML dashboard | [Telemetry](telemetry.md) |
 | Cost accounting | Subscription calls at $0, unpriced calls marked unpriced | [Telemetry](telemetry.md#cost-reporting) |
 | Quota tracking | Codex rate limits and local credit budgets | [Telemetry](telemetry.md#quota) |

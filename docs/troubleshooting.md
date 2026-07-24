@@ -87,11 +87,6 @@ count is not evidence.
 It did not complete — missing, empty, or malformed reports are recorded as
 failures or `invalid-output`, never as success.
 
-**Concurrent writes were rejected.**
-With [Rift](rift.md) enabled, concurrent writers must use `flow_rift_task`.
-Ordinary shared-checkout concurrent writers are refused rather than silently
-racing.
-
 ## Review
 
 **Review was skipped.**
@@ -101,29 +96,6 @@ self-review. See [Milestone review](review.md).
 
 **A third review round was refused.**
 Two rounds is the hard maximum.
-
-## Rift
-
-**`flow_rift_status` says the CLI is not runnable.**
-`rift` is not installed or not on PATH. Install `rift-snapshot`, or set
-`rift.enabled` to false.
-
-**Initialization fails with "does not support Linux copy-on-write reflinks".**
-Your filesystem cannot host Rift. It needs btrfs, a Linux filesystem with native
-reflink support, or APFS. Plain ext4 will not work, and this is not something
-configuration can fix.
-
-**"Rift root marker not found."**
-Run `flow_rift_init` in that directory first. It is permission-gated because it
-can alter workspace layout.
-
-**"A Rift baseline from a previous run is still active."**
-Integrate it, or run `flow_rift_cleanup`.
-
-**Integration rejected my worker.**
-Integration refuses undeclared changes, unchanged declarations, conflicts
-between workers, files changed since the baseline, and escaping symlinks. The
-error names which rule fired.
 
 ## Development
 

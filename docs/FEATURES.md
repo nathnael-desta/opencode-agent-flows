@@ -64,12 +64,6 @@ Custom tools:
 - `flow_dashboard`: returns dashboard and report paths.
 - `flow_feedback`: records explicit good, mixed, or bad feedback.
 - `flow_approve_escalation`: opens a permission prompt for a gated agent.
-- `flow_rift_status`: reports opt-in Rift backend availability.
-- `flow_rift_init`: permission-gated Rift initialization.
-- `flow_rift_begin`: snapshots an exact session baseline.
-- `flow_rift_task`: runs one worker in an isolated child snapshot.
-- `flow_rift_integrate`: validates and centrally applies worker changes.
-- `flow_rift_cleanup`: discards unintegrated Rift workspaces.
 
 When a run finishes, the plugin optionally shows a compact toast with subagent
 count, estimated baseline reduction, and metered cost. Disable it with
@@ -226,27 +220,8 @@ Independent switches:
 - `shadowImplementation`: read-only patch proposal before implementation.
 
 The current shadow-implementation mode is deliberately read-only. A true
-counterfactual implementation should use the Rift isolation backend and
+counterfactual implementation should be read-only and
 artifact comparison.
-
-## Rift-Isolated Writers
-
-Rift snapshots preserve staged, unstaged, untracked, and non-excluded ignored
-state. One immutable session snapshot becomes the parent for isolated workers.
-Workers never edit the live checkout. Integration compares each worker against
-the immutable baseline, accepts only files declared in its work report, rejects
-cross-worker conflicts, and refuses to overwrite live files changed since the
-snapshot.
-
-Rift is experimental and opt-in. Linux requires btrfs or native reflinks;
-macOS requires APFS; Windows workspace creation is unavailable. The plugin uses
-the CLI rather than Node's experimental FFI and does not silently fall back to
-shared concurrent writers.
-
-Evaluator prompts require a structured `<flow-evaluation>` marker. Parsed
-scores and verdicts are stored as quality evidence. The plugin computes costs,
-usage, retries, and latency deterministically rather than asking the evaluator
-to invent financial numbers.
 
 ## Quality Evidence
 
@@ -314,7 +289,7 @@ areas use different names.
 
 Telemetry, dashboard, quota, and evaluator failures fail open: they log a
 warning but do not invalidate completed application work. Worker/provider,
-structured-output, guardrail, approval, and Rift integration failures are
+structured-output, guardrail, and approval failures are
 explicit and fail closed because their purpose is enforcement.
 
 Prompt text, tool output, and source diffs are not persisted by default. The

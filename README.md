@@ -154,11 +154,6 @@ Review is a milestone gate, not a per-commit gate. MiMo V2.5 Pro reviews one
 compact accumulated changeset after deterministic checks, with a normal limit
 of one round and a hard ceiling of two rounds after non-trivial fixes.
 
-Optional Rift integration gives concurrent writers copy-on-write snapshots of
-the exact dirty workspace. A central integration step rejects undeclared files,
-worker conflicts, and source files changed after the baseline. Rift remains
-experimental and must be enabled explicitly on a supported filesystem.
-
 Deep escalation is technically cheap-first: architecture and other high-risk
 work goes to the routine worker with strict stop conditions. The plugin rejects
 Deep unless the current run already contains a failed or blocked routine result,
