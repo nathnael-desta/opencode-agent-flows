@@ -223,3 +223,108 @@ describe("S9: rendering and no-op guards", () => {
     }
   })
 })
+
+describe("live-OpenCode findings", () => {
+  // Found by running a real `opencode serve` with this plugin loaded.
+  describe("a provider reporting zero does not mean free", () => {
+    test("a real published price beats a provider's unmetered zero", () => {
+      // OpenCode reports cost 0 for subscription/OAuth-backed providers. Taking
+      // that literally made frontier models look free, so every role including
+      // the cost-led one recommended the most expensive models.
+      const catalog = buildCatalog({
+        providers: [{ id: "openai", models: [{ id: "gpt-5.6-sol", cost: { input: 0, output: 0 } }] }],
+        modelsDev: { openai: { "gpt-5.6-sol": { cost: { input: 5, output: 30 } } } },
+      })
+      expect(catalog[0].blendedPerMillion).toBe((3 * 5 + 30) / 4)
+    })
+
+    test("zero is trusted only when the catalog corroborates it", () => {
+      const free = buildCatalog({
+        providers: [{ id: "github-models", models: [{ id: "phi-4", cost: { input: 0, output: 0 } }] }],
+        modelsDev: { "github-models": { "phi-4": { cost: { input: 0, output: 0 } } } },
+      })
+      expect(free[0].blendedPerMillion).toBe(0)
+    })
+
+    test("an uncorroborated zero is unknown, not free", () => {
+      // A gateway absent from models.dev simply is not metering; reporting it as
+      // $0 let it sweep the cost-led ranking.
+      const unknown = buildCatalog({
+        providers: [{ id: "commandcode", models: [{ id: "claude-fable-5", cost: { input: 0, output: 0 } }] }],
+      })
+      expect(unknown[0].blendedPerMillion).toBeUndefined()
+    })
+
+    test("a provider's own non-zero price is kept", () => {
+      const catalog = buildCatalog({
+        providers: [{ id: "aihubmix", models: [{ id: "x", cost: { input: 0.25, output: 2 } }] }],
+        modelsDev: { aihubmix: { x: { cost: { input: 99, output: 99 } } } },
+      })
+      expect(catalog[0].inputPerMillion).toBe(0.25)
+    })
+  })
+
+  describe("quality resolves aggregator and reseller ids", () => {
+    const index = buildQualityIndex(
+      [
+        { id: "microsoft/phi-4-mini-instruct", coding: 30 },
+        { id: "deepseek/deepseek-v4-pro", coding: 59.4 },
+        { id: "vendor-a/shared-name", coding: 10 },
+        { id: "vendor-b/shared-name", coding: 90 },
+      ],
+      true,
+    )
+
+    test("strips any aggregator prefix, not just openrouter", () => {
+      // github-models/microsoft/phi-4-mini-instruct — only 13 of 306 real models
+      // scored before this.
+      expect(index.match("github-models/microsoft/phi-4-mini-instruct")?.matchedId).toBe("microsoft/phi-4-mini-instruct")
+      expect(index.match("huggingface/microsoft/phi-4-mini-instruct")?.score).toBe(30)
+    })
+
+    test("resolves a reseller's bare model name when it is unambiguous", () => {
+      expect(index.match("commandcode/deepseek-v4-pro")?.matchedId).toBe("deepseek/deepseek-v4-pro")
+    })
+
+    test("refuses an ambiguous bare name rather than guessing", () => {
+      expect(index.match("reseller/shared-name")).toBeUndefined()
+    })
+
+    test("still refuses derivatives", () => {
+      expect(index.match("commandcode/deepseek-v4-pro-mini")).toBeUndefined()
+    })
+  })
+})
+
+describe("duplicate plugin instances are diagnosable", () => {
+  // Found live: an older globally-installed copy won agent registration, so the
+  // running flow silently was not the configured one.
+  test("flow_config reports agents that another definition already supplied", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "flow-shadow-"))
+    try {
+      const hooks: any = await plugin({}, { telemetry: { reportDir: directory } })
+      const config: Record<string, any> = { agent: { routine: { model: "someone-else/model", mode: "subagent" } } }
+      await hooks.config(config)
+      // The pre-existing definition is preserved, as documented...
+      expect(config.agent.routine.model).toBe("someone-else/model")
+      // ...but no longer silently.
+      expect(await hooks.tool.flow_config.execute({})).toContain("loaded twice")
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
+  test("a user's own model override is not reported as shadowing", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "flow-shadow-"))
+    try {
+      const setup: any = await plugin({}, { telemetry: { reportDir: directory } })
+      await setup.tool.flow_models.execute({ agent: "routine", model: "commandcode/laguna-s-2.1-free" })
+      const hooks: any = await plugin({}, { telemetry: { reportDir: directory } })
+      const config: Record<string, any> = { agent: { routine: { model: "commandcode/laguna-s-2.1-free", mode: "subagent" } } }
+      await hooks.config(config)
+      expect(await hooks.tool.flow_config.execute({})).not.toContain("loaded twice")
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+})

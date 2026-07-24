@@ -203,27 +203,42 @@ export interface QualityIndex {
  */
 export function buildQualityIndex(entries: QualityEntry[], live: boolean): QualityIndex {
   const byKey = new Map<string, QualityEntry>()
+  // Model segment alone, kept only while it stays unambiguous. Resellers and
+  // gateways serve the same model under their own provider id
+  // (commandcode/deepseek-v4-pro is deepseek/deepseek-v4-pro), so without this
+  // almost nothing on an aggregator-heavy setup gets a score. Ambiguous
+  // segments are dropped rather than guessed.
+  const bySuffix = new Map<string, QualityEntry | null>()
   for (const entry of entries) {
     const key = qualityKey(entry.id)
-    if (key && !byKey.has(key)) byKey.set(key, entry)
+    if (!key) continue
+    if (!byKey.has(key)) byKey.set(key, entry)
+    const suffix = key.slice(key.lastIndexOf("/") + 1)
+    if (!suffix) continue
+    if (!bySuffix.has(suffix)) bySuffix.set(suffix, entry)
+    else if (bySuffix.get(suffix)?.id !== entry.id) bySuffix.set(suffix, null)
   }
   const source = live ? "openrouter-live" : "openrouter-snapshot"
   return {
     size: byKey.size,
     match(modelId) {
-      // models.dev routes aggregator models as "openrouter/<openrouter id>",
-      // so strip that prefix to recover the upstream id. Everything else is
-      // already provider/model and matches directly.
-      const candidates = [modelId]
-      if (modelId.startsWith("openrouter/")) candidates.push(modelId.slice("openrouter/".length))
-      for (const candidate of candidates) {
-        const entry = byKey.get(qualityKey(candidate))
-        if (!entry) continue
-        // Prefer the coding index: these roles all write code. Fall back to the
-        // general index and record which scale was used, because the two are
-        // not comparable across models.
+      const key = qualityKey(modelId)
+      // Try the full id, then the vendor-qualified remainder (aggregators like
+      // openrouter/ and github-models/ prefix their own id onto vendor/model),
+      // then the unambiguous bare model segment. Every step is exact string
+      // equality — never substring, which would let a "-mini" derivative
+      // inherit its flagship's score.
+      const candidates = [key]
+      const firstSlash = key.indexOf("/")
+      const remainder = firstSlash >= 0 ? key.slice(firstSlash + 1) : ""
+      if (remainder.includes("/")) candidates.push(remainder)
+      // Prefer the coding index: these roles all write code. Fall back to the
+      // general index and record which scale was used, because the two are not
+      // comparable across models.
+      const resolve = (entry: QualityEntry | null | undefined): QualityMatch | undefined => {
+        if (!entry) return undefined
         const score = entry.coding ?? entry.intelligence
-        if (score === undefined) continue
+        if (score === undefined) return undefined
         return {
           score,
           scale: entry.coding !== undefined ? "aa-coding-index" : "aa-intelligence-index",
@@ -234,7 +249,13 @@ export function buildQualityIndex(entries: QualityEntry[], live: boolean): Quali
           source,
         }
       }
-      return undefined
+
+      for (const candidate of candidates) {
+        const match = resolve(byKey.get(candidate))
+        if (match) return match
+      }
+      // Last resort: the bare model segment, only where it is unambiguous.
+      return resolve(bySuffix.get(key.slice(key.lastIndexOf("/") + 1)))
     },
   }
 }

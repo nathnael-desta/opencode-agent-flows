@@ -90,9 +90,34 @@ export function normalizeProviders(raw: unknown): DiscoveredProvider[] {
 }
 
 /**
+ * Choose a paper price between what the provider reports and what models.dev
+ * publishes.
+ *
+ * A provider reporting 0 does not mean the model is free: OpenCode zeroes the
+ * price for subscription- and OAuth-backed providers because those calls are
+ * not metered. Taking that 0 literally made frontier models look free, so every
+ * role — including the cost-led one — recommended the most expensive models.
+ *
+ * Paper price is the baseline that effective cost is computed *from*; whether a
+ * model is actually free to the user is decided by its billing source, not by a
+ * missing meter. So prefer any real published price, and fall back to 0 only
+ * when nobody publishes one (genuinely free models are 0 in models.dev too).
+ */
+function publishedPrice(fromProvider?: number, fromCatalog?: number): number | undefined {
+  if (fromProvider !== undefined && fromProvider > 0) return fromProvider
+  if (fromCatalog !== undefined && fromCatalog > 0) return fromCatalog
+  // A zero is only believable when the catalog corroborates it. Otherwise the
+  // provider simply is not metering (subscription, OAuth, or a gateway absent
+  // from models.dev) and the price is unknown, not free. Reporting unknown
+  // keeps these models from sweeping the cost-led ranking on a fake $0.
+  if (fromProvider === 0 && fromCatalog === 0) return 0
+  if (fromProvider === undefined) return fromCatalog
+  return undefined
+}
+
+/**
  * Build the model catalog from the user's available providers, enriched with
- * models.dev pricing/capabilities and an optional quality index. The client's
- * own model data wins when present; models.dev fills gaps.
+ * models.dev pricing/capabilities and an optional quality index.
  */
 export function buildCatalog(input: {
   providers: DiscoveredProvider[]
@@ -103,8 +128,8 @@ export function buildCatalog(input: {
   for (const provider of input.providers) {
     for (const model of provider.models) {
       const enrichment = input.modelsDev?.[provider.id]?.[model.id]
-      const inputPerMillion = model.cost?.input ?? enrichment?.cost?.input
-      const outputPerMillion = model.cost?.output ?? enrichment?.cost?.output
+      const inputPerMillion = publishedPrice(model.cost?.input, enrichment?.cost?.input)
+      const outputPerMillion = publishedPrice(model.cost?.output, enrichment?.cost?.output)
       const displayName = model.name ?? enrichment?.name ?? model.id
       const id = `${provider.id}/${model.id}`
       candidates.push({

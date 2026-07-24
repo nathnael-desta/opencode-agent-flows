@@ -444,6 +444,7 @@ export default async function agentFlowsPlugin(input: any, options: PluginOption
   const riftEnabled = options.rift?.enabled === true
   const rift = new RiftClient(options.rift?.command ?? "rift")
   const riftRuns = new Map<string, RiftRunState>()
+  const shadowedAgents: string[] = []
 
   async function resolveRoot(sessionID: string): Promise<SessionInfo | undefined> {
     const isolatedRoot = isolatedSessionRoots.get(sessionID)
@@ -711,13 +712,16 @@ export default async function agentFlowsPlugin(input: any, options: PluginOption
         path: orchestrationConfigPath,
         active: options.flow === "custom" && !configError,
       })
-      if (!configError) return view
+      const shadowNote = shadowedAgents.length
+        ? `\n\n> Note: ${shadowedAgents.join(", ")} are defined elsewhere and keep that definition. If you did not define them yourself, this plugin is likely loaded twice (globally and per project); remove one copy.`
+        : ""
+      if (!configError) return view + shadowNote
       return [
         `> Your configuration could not be loaded, so the built-in ${DEFAULT_FLOW} flow is running instead.`,
         `> Reason: ${configError}`,
         "> Fix it with flow_configure, or re-run the flow-setup command, then restart OpenCode.",
         "",
-        view,
+        view + shadowNote,
       ].join("\n")
     },
   })
@@ -1055,6 +1059,13 @@ export default async function agentFlowsPlugin(input: any, options: PluginOption
     config: async (config: OpenCodeConfig) => {
       config.agent ??= {}
       for (const [name, definition] of Object.entries(configuredAgents)) {
+        // Someone else already defined this agent. That is supported — your own
+        // agent definitions win — but it also happens when this plugin is
+        // installed twice (say globally from npm and again per project), where
+        // whichever instance loads first silently supplies every agent. That
+        // failure is invisible and hard to diagnose, so record it.
+        const existing = config.agent[name] as AgentDefinition | undefined
+        if (existing && !modelOverrides[name] && existing.model && existing.model !== definition.model) shadowedAgents.push(name)
         if (modelOverrides[name] && config.agent[name]) {
           const { variant: _variant, ...withoutVariant } = config.agent[name] as AgentDefinition
           config.agent[name] = {
@@ -1071,6 +1082,10 @@ export default async function agentFlowsPlugin(input: any, options: PluginOption
         config.agent["flow-shadow-planner"] ??= evaluatorAgent(baseline, "Create an independent read-only implementation plan.", "shadow-plan")
         config.agent["flow-shadow-implementer"] ??= evaluatorAgent(baseline, "Create a read-only patch proposal without modifying files.", "shadow-implementation")
       }
+      if (shadowedAgents.length)
+        console.warn(
+          `opencode-agent-flows: ${shadowedAgents.join(", ")} were already defined elsewhere and keep that definition. If you did not define them yourself, this plugin is probably loaded twice (for example globally and per project); remove one copy.`,
+        )
       if (options.setDefault !== false) config.default_agent ??= flow.defaultAgent
       config.command ??= {}
       config.command["flow-setup"] ??= {

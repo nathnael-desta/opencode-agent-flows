@@ -69,6 +69,14 @@ the flagship's score, making a cheap small model outrank the real frontier model
 and inverting the recommendation this exists to produce. A missing score is
 safer than a wrong one.
 
+**Ids resolve across aggregators and resellers.** A score is found by trying the
+full id, then the vendor-qualified remainder (`github-models/microsoft/phi-4`
+resolves `microsoft/phi-4`), then the bare model name **only where it is
+unambiguous** (`commandcode/deepseek-v4-pro` resolves `deepseek/deepseek-v4-pro`).
+Ambiguous names are refused rather than guessed. Every step is exact string
+equality. On a real aggregator-heavy setup this took coverage from 13 of 306
+models to 127.
+
 **Models that cannot call tools are excluded from ranking.** Every role
 delegates through tools, so a free embedding or text-to-speech model is unusable
 regardless of price. Without this filter they topped the cost-led ranking.

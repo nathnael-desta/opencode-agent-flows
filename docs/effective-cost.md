@@ -40,6 +40,15 @@ That inversion is the whole point. This is exactly the case the project tests:
 > Treating a paper-expensive model as `subscription-flat` makes it free at the
 > margin, so it wins even the cost-led role.
 
+> [!NOTE]
+> A provider reporting a price of `0` does not mean the model is free. OpenCode
+> zeroes the price for subscription- and OAuth-backed providers because those
+> calls are not metered. Paper price is the baseline effective cost is computed
+> *from*, so a real published price always wins, and an uncorroborated zero is
+> recorded as **unknown** rather than free. Whether a model is actually free to
+> you is decided by its billing source — which is exactly what the interview
+> asks about.
+
 ## Capacity is the catch
 
 `subscription-flat` and `bundled-credit` are ~$0 **within capacity**. They are

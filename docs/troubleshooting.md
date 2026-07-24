@@ -24,6 +24,20 @@ shows what is saved and whether it is currently active.
 The configuration exists but you have not selected it. Set
 `{ "flow": "custom" }` in your plugin options and restart.
 
+**The running agents are not the ones I configured.**
+This plugin is probably loaded twice — commonly installed globally from npm and
+again per project. Whichever instance loads first supplies every agent, so an
+older copy can silently win while the newer one still registers its commands.
+`/flow-config` names the affected agents, and a warning is logged at startup.
+Remove one copy from your `opencode.json`.
+
+**A model shows `price n/a`.**
+Nobody publishes a price for it. A provider reporting `0` is only treated as
+free when models.dev agrees; otherwise the provider simply is not metering
+(subscription, OAuth, or a gateway models.dev does not cover) and the price is
+recorded as unknown rather than as free. This keeps unmetered frontier models
+from sweeping the cost-led ranking on a fake $0.
+
 **My own `/flow-setup` command was replaced.**
 It was not — the plugin only registers its commands when the name is unused.
 A command you defined always wins.
