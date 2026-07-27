@@ -39,6 +39,8 @@ describe("docsify site", () => {
     expect(html).toContain("coverpage: true")
     expect(html).toContain("search")
     expect(html).toContain("docsify@5")
+    expect(html).toContain("core-dark.min.css")
+    expect(html).toContain("prefers-color-scheme: dark")
   })
 
   test("every sidebar link points at a real file", async () => {

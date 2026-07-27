@@ -27,6 +27,19 @@ Configuration:
 - [ ] Restarting OpenCode does not delete prior reports.
 - [ ] Disabling telemetry leaves normal flow execution working.
 
+## Orchestration Setup
+
+- [x] Run scripted `bun run setup` with explicit orchestrator, bulk, routine,
+      reviewer, and deep assignments; confirm it writes a valid configuration.
+- [x] Load that saved configuration through the plugin's `custom` flow and
+      confirm every selected model and inherited variant reaches OpenCode config.
+- [x] Confirm the generated presentation identifies the file as saved but not
+      active until `flow: "custom"` is configured and OpenCode restarts.
+- [ ] Run the interactive `/flow-setup` command against the live authenticated
+      OpenCode provider list and complete the billing interview.
+- [ ] Activate the generated custom flow in the user's normal OpenCode config
+      and verify one real delegation per configured role.
+
 ## Run, Session, And Global Scope
 
 - [ ] Send one root request that does not delegate.
@@ -172,9 +185,19 @@ Configuration:
 - [ ] Open `docs/flows/<flow>.md` and render both Mermaid diagrams.
 - [ ] Confirm every configured agent, model, effort, billing source, and approval
       requirement matches runtime configuration.
-- [ ] Run `bun run docs:check` and confirm it passes.
+- [x] Run `bun run docs:check` and confirm it passes.
 - [ ] Modify a flow definition without regenerating docs and confirm the check
       fails; then run `bun run docs` to restore it.
+
+## Docsify Site
+
+- [x] Serve `docs/` with Docsify and confirm the overview, sidebar, search box,
+      syntax highlighting, and responsive content render in a browser.
+- [x] Navigate directly to **Choose your models** and confirm the role table,
+      saved configuration, safety explanation, and setup commands render.
+- [ ] Exercise the search index against every feature name and verify all
+      expected pages are discoverable.
+- [ ] Render the generated Mermaid flow diagrams in the browser.
 
 ## Failure And Recovery
 

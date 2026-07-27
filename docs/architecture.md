@@ -130,8 +130,15 @@ from production displacement calculations. Evaluator prompts are read-only and
 must return structured evidence. Evaluation failure cannot fail production
 work.
 
-## Writer Isolation
+## Writer Concurrency
 
+The scheduler may dispatch read-only or rigorously disjoint tasks concurrently,
+up to `maxConcurrentWorkers`. Writers currently share the OpenCode workspace;
+the plugin does not claim filesystem isolation, worktrees, or Rift snapshots.
+Overlapping writes stay serial by orchestration policy, and final verification
+runs against the integrated checkout. If strict writer isolation is required,
+run those workers in externally managed isolated workspaces rather than assuming
+the concurrency limit creates isolation.
 
 ## Quota Sources
 

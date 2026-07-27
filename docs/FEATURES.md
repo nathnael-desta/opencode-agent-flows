@@ -273,6 +273,10 @@ completed an OpenCode permission prompt. Approval is consumed after one use.
 
 This is a technical boundary, unlike a prompt-only instruction.
 
+Projects can add locally defined gated agents with
+`guardrails.approvalAgents`. This only extends the firewall; it cannot remove
+the built-in approval requirement from escalation agents.
+
 ## Protected Paths
 
 Worker and bulk-worker agents may inspect protected paths but are blocked from

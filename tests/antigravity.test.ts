@@ -45,6 +45,7 @@ describe("formatAntigravityStatus", () => {
     expect(text).toContain("long-horizon autonomy")
     expect(text).toContain("only Google's own Gemini")
     expect(text).toContain("gemini-3.6-flash-high")
+    expect(text).toContain("do not upgrade helper work to Gemini 3.1 Pro")
   })
 
   test("unavailable guidance says how to enable it", () => {

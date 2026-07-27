@@ -39,7 +39,6 @@ configuration cannot remove the concurrency limit or silently disable review.
     "flow": "openai-commandcode-router",
     "setDefault": true,
     "telemetry": {
-      "enabled": true,
       "reportDir": "~/.local/state/opencode-agent-flows",
       "runSummaryToast": true,
       "dashboard": true,
@@ -52,14 +51,10 @@ configuration cannot remove the concurrency limit or silently disable review.
     },
     "quota": {
       "codex": true,
-      "refreshMs": 300000,
       "commandCodeMonthlyCreditsUsd": 40
     },
     "verification": {
-      "enabled": true,
-      "autoRun": false,
-      "maxWorkerAttempts": 2,
-      "timeoutMs": 300000
+      "maxWorkerAttempts": 2
     },
     "orchestration": {
       "maxTasksPerRun": 12,
@@ -81,7 +76,8 @@ configuration cannot remove the concurrency limit or silently disable review.
         "**/billing/**",
         "**/infrastructure/**",
         "**/migrations/**"
-      ]
+      ],
+      "approvalAgents": ["deploy"]
     },
     "developer": {
       "enabled": false,
@@ -134,6 +130,34 @@ Each evaluator can be selected independently:
 
 The sample rate applies to enabled developer evaluations. Production reviewer
 sampling is configured separately under `reviewer.sampleRate`.
+
+`sampleSalt` makes deterministic sampling reproducible. The same flow, run ID,
+salt, and rate select the same runs after restart; change the salt when starting
+a new experiment cohort.
+
+## Compatibility Placeholders
+
+The TypeScript option types still accept several fields from earlier prototypes,
+but they do not currently alter runtime behavior:
+
+| Option | Current behavior |
+|---|---|
+| `telemetry.enabled` | Reserved. Telemetry remains active; control output with `reportDir`, `dashboard`, and `runSummaryToast`. |
+| `verification.enabled` | Reserved. Repository-aware verification guidance remains part of the flow. |
+| `verification.autoRun` | Reserved; deterministic automatic command execution is not implemented. |
+| `verification.timeoutMs` | Reserved; OpenCode's built-in task tool does not expose a general wall-clock cancellation hook here. |
+| `quota.refreshMs` | Reserved; quota is sampled when a run report is finalized. |
+
+They are intentionally omitted from the complete example so the example does
+not imply functionality that does not exist.
+
+## Additional Approval Agents
+
+`guardrails.approvalAgents` adds agent names to the plugin's one-use approval
+firewall. This is useful for a locally defined deployment or production agent
+that should require `flow_approve_escalation` even when the selected flow does
+not mark it as an escalation role. It can only add gates; it cannot remove the
+approval requirement from `deep` or `extreme-*`.
 
 ## API-equivalent prices
 

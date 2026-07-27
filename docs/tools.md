@@ -118,10 +118,14 @@ flow_models agent=routine reset=true
 
 Detects whether Google Antigravity (Gemini on a Google AI Pro subscription, via
 the `agy` CLI) is available, and prints how to route work to it. Gemini is an
-effectively-free helper for **vision** (screenshots, UI, PDFs, diagrams —
-stronger than frontier coding models), **large-context reads** (1M window), and
+effectively-free helper for **vision** (screenshots, UI, PDFs, diagrams),
+**large-context reads** (1M window), and
 **cheap bulk work**. Keep the agentic loop and review on your primary models;
 Flash is weak at long-horizon autonomy.
+
+Prefer Gemini 3.6 Flash for these helper calls, with
+`gemini-3.6-flash-high` for difficult analysis. Do not substitute Gemini 3.1
+Pro for this helper role.
 
 The tools themselves ship in the separate `opencode-antigravity-delegate` plugin
 (`antigravity_vision` / `antigravity_delegate` / `antigravity_background_*`);
@@ -138,6 +142,10 @@ when both plugins are loaded the orchestrator delegates to them automatically.
 
 See [Telemetry and reports](telemetry.md).
 
+`flow_dashboard` rebuilds the global aggregate and self-contained dashboard HTML
+before returning their paths, so the returned files reflect all persisted runs
+known at call time.
+
 ## Escalation
 
 ### `flow_approve_escalation`
@@ -147,4 +155,3 @@ Escalation to `deep` or `extreme-*` is blocked until you approve it. Approval is
 
 `deep` additionally requires that the run already contains a concrete failed or
 blocked `routine` result. Being long or touching many files is not evidence.
-

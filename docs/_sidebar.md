@@ -2,6 +2,7 @@
 
   - [Overview](/)
   - [Install and configure](CONFIGURATION.md)
+  - [Host on GitHub Pages](hosting.md)
   - [Everything it does](features-index.md)
   - [Feature reference](FEATURES.md)
 
@@ -16,6 +17,7 @@
   - [Architecture](architecture.md)
   - [Reliability and budgets](reliability.md)
   - [Milestone review](review.md)
+  - [Browser and frontend verification](browser-routing.md)
   - [Telemetry and reports](telemetry.md)
 
 - Flows
