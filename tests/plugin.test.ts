@@ -62,10 +62,11 @@ describe("agent flows plugin", () => {
     expect(config.agent.deep.description).toContain("Escalation-only")
     expect(config.agent.orchestrator.prompt).toContain("bounded unit")
     expect(config.agent.orchestrator.prompt).toContain("milestone gate")
-    expect(config.agent.orchestrator.prompt).toContain("stop after two total rounds")
+    expect(config.agent.orchestrator.prompt).toContain("max two total")
     expect(config.agent.orchestrator.prompt).toContain("Dispatch up to three")
     expect(config.agent.orchestrator.prompt).toContain("different model family")
     expect(config.agent.orchestrator.prompt).toContain("no independent cross-family reviewer")
+    expect(config.agent.orchestrator.prompt).toContain("advisory evidence")
     expect(config.agent.orchestrator.prompt).toContain("Agent or general-purpose subagents")
     expect(config.agent.orchestrator.prompt).toContain("concrete failed or blocked result")
     expect(config.agent.orchestrator.prompt).toContain("surface-level and cheap")
@@ -201,6 +202,8 @@ describe("agent flows plugin", () => {
     const first = { subagent_type: "reviewer", description: reviewPacket }
     await hooks["tool.execute.before"]?.({ tool: "task", sessionID: "root", callID: "review-one" }, { args: first })
     expect(first.description).toContain("Review Execution Contract")
+    expect(first.description).toContain("advisory evidence")
+    expect(first.description).toContain("must not be dismissed by opinion alone")
     await hooks["tool.execute.after"]?.(
       { callID: "review-one" },
       { output: '<flow-review>{"verdict":"changes-requested","summary":"one bug","findings":[{"severity":"high","title":"Bug","evidence":"Concrete failure","verification":"bun test"}]}</flow-review>' },
@@ -416,5 +419,6 @@ describe("agent flows plugin", () => {
     expect(prompt).toContain("Consolidate multiple review requests")
     expect(prompt).toContain("Reserve direct edits for truly trivial corrections")
     expect(prompt).toContain("first re-delegate the same Task ID")
+    expect(prompt).toContain("Verify work proportionately")
   })
 })

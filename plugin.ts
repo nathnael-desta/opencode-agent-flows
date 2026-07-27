@@ -58,7 +58,7 @@ const DEEP_PACKET_HEADINGS = [...WORK_PACKET_HEADINGS, "Escalation Evidence"]
 const MAX_WORK_PACKET_CHARS = 3_000
 const REVIEW_PACKET_HEADINGS = ["Review Milestone", "Acceptance", "Change Set", "Verification", "Risk"]
 const WORK_REPORT_CONTRACT = `\n\n## Worker Execution Contract\nInspect the repository before editing. Treat the packet's file and implementation assumptions as hypotheses: correct them when repository evidence requires it, but do not silently broaden the behavioral scope. Stop and report a blocker when the requirements conflict, the scope must expand, or safe verification is unavailable. End with exactly one <flow-work-report> JSON object: {"status":"completed|blocked","summary":"...","filesChanged":["..."],"verification":[{"command":"...","status":"passed|failed|not-run"}],"scopeChanges":["..."],"blocker":"optional"}. Report formatting is not a separate task: if the marker cannot be produced, return the substantive result once and stop.`
-const REVIEW_REPORT_CONTRACT = `\n\n## Review Execution Contract\nThis is a milestone gate, not a per-commit review. Review only correctness, security, behavioral regressions, acceptance coverage, and meaningful missing tests. Do not report style or issues already enforced by lint, types, or tests. Return no more than {MAX_FINDINGS} findings. Every finding needs severity, concrete evidence, and an actionable verification. End with exactly one <flow-review> JSON object: {"verdict":"pass|changes-requested|blocked","summary":"...","findings":[{"severity":"critical|high|medium|low","title":"...","evidence":"...","file":"optional","line":1,"verification":"optional"}]}.`
+const REVIEW_REPORT_CONTRACT = `\n\n## Review Execution Contract\nThis is a milestone gate, not a per-commit review. Review only correctness, security, behavioral regressions, acceptance coverage, and meaningful missing tests. Do not report style or issues already enforced by lint, types, or tests. Return no more than {MAX_FINDINGS} findings. Every finding needs severity, concrete evidence, and an actionable verification. Findings are advisory evidence: the implementing worker or orchestrator must evaluate each and may reject it with a concise evidence-based reason, but security and correctness findings must not be dismissed by opinion alone. End with exactly one <flow-review> JSON object: {"verdict":"pass|changes-requested|blocked","summary":"...","findings":[{"severity":"critical|high|medium|low","title":"...","evidence":"...","file":"optional","line":1,"verification":"optional"}]}.`
 
 function deterministicSample(value: string, rate: number): boolean {
   let hash = 2166136261
@@ -598,7 +598,8 @@ export default async function agentFlowsPlugin(input: any, options: PluginOption
     const run = activeRuns.get(sessionID)
     const sampled = deterministicSample(`${flow.id}:${run?.id ?? sessionID}:review`, reviewerPolicy.sampleRate)
     return [
-      `Milestone review policy: maximum ${reviewerPolicy.maxRounds} round(s), maximum ${reviewerPolicy.maxFindings} findings per round, and never one review per commit.`,
+      `Milestone review policy: 1 consolidated review by default, at most ${reviewerPolicy.maxRounds} total rounds, maximum ${reviewerPolicy.maxFindings} findings per round, and never one review per commit.`,
+      `A second review is only allowed after non-trivial accepted fixes from the first round, and requires Finding Disposition and Non-trivial Fixes headings in the packet.`,
       sampled
         ? "This run was selected for sampled review if it produces a substantial self-contained changeset."
         : "This run was not selected for sampled review; explicit requests, final handoff milestones, and self-contained high-risk units still qualify.",

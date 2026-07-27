@@ -128,6 +128,9 @@ describe("buildFlowFromConfig", () => {
     expect(prompt).toContain("Consolidate multiple review requests")
     expect(prompt).toContain("Skills suggest")
     expect(prompt).toContain("first re-delegate the same Task ID")
+    expect(prompt).toContain("advisory evidence")
+    expect(prompt).toContain("max two total")
+    expect(prompt).toContain("Verification must be proportionate")
   })
 })
 
