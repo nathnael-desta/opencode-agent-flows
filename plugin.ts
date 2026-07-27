@@ -58,7 +58,7 @@ const DEEP_PACKET_HEADINGS = [...WORK_PACKET_HEADINGS, "Escalation Evidence"]
 const MAX_WORK_PACKET_CHARS = 3_000
 const REVIEW_PACKET_HEADINGS = ["Review Milestone", "Acceptance", "Change Set", "Verification", "Risk"]
 const WORK_REPORT_CONTRACT = `\n\n## Worker Execution Contract\nInspect the repository before editing. Treat the packet's file and implementation assumptions as hypotheses: correct them when repository evidence requires it, but do not silently broaden the behavioral scope. Stop and report a blocker when the requirements conflict, the scope must expand, or safe verification is unavailable. End with exactly one <flow-work-report> JSON object: {"status":"completed|blocked","summary":"...","filesChanged":["..."],"verification":[{"command":"...","status":"passed|failed|not-run"}],"scopeChanges":["..."],"blocker":"optional"}. Report formatting is not a separate task: if the marker cannot be produced, return the substantive result once and stop.`
-const REVIEW_REPORT_CONTRACT = `\n\n## Review Execution Contract\nThis is a milestone gate, not a per-commit review. Review only correctness, security, behavioral regressions, acceptance coverage, and meaningful missing tests. Do not report style or issues already enforced by lint, types, or tests. Return no more than {MAX_FINDINGS} findings. Every finding needs severity, concrete evidence, and an actionable verification. Findings are advisory evidence: the implementing worker or orchestrator must evaluate each and may reject it with a concise evidence-based reason, but security and correctness findings must not be dismissed by opinion alone. End with exactly one <flow-review> JSON object: {"verdict":"pass|changes-requested|blocked","summary":"...","findings":[{"severity":"critical|high|medium|low","title":"...","evidence":"...","file":"optional","line":1,"verification":"optional"}]}.`
+const REVIEW_REPORT_CONTRACT = `\n\n## Review Execution Contract\nThis is milestone review round {CURRENT_ROUND} of {MAX_ROUNDS}. This is a milestone gate, not a per-commit review. Review only correctness, security, behavioral regressions, acceptance coverage, and meaningful missing tests. Do not report style or issues already enforced by lint, types, or tests. Return no more than {MAX_FINDINGS} findings. Every finding needs severity, concrete evidence, and an actionable verification. Findings are advisory evidence: the implementing worker or orchestrator must evaluate each and may reject it with a concise evidence-based reason, but security and correctness findings must not be dismissed by opinion alone. End with exactly one <flow-review> JSON object: {"verdict":"pass|changes-requested|blocked","summary":"...","findings":[{"severity":"critical|high|medium|low","title":"...","evidence":"...","file":"optional","line":1,"verification":"optional"}]}.`
 
 function deterministicSample(value: string, rate: number): boolean {
   let hash = 2166136261
@@ -140,6 +140,49 @@ function tolerantJson(raw: string): unknown {
   return JSON.parse(sanitized)
 }
 
+/**
+ * Try to extract the single unambiguous JSON object from output when wrapper
+ * tags are missing. Returns the inner JSON text (without code fences) on
+ * success, or undefined when zero or multiple candidates exist.
+ */
+function extractUntaggedJson(output: string, requiredKeys: string[]): string | undefined {
+  let fenced = output
+  const fenceMatch = output.match(/```(?:json|JAVASCRIPT|javascript|JSON)?\s*\n([\s\S]*?)\n\s*```/)
+  if (fenceMatch) fenced = fenceMatch[1]
+  const objects: { text: string; start: number }[] = []
+  let depth = 0
+  let start = -1
+  let inString = false
+  let escape = false
+  for (let i = 0; i < fenced.length; i++) {
+    const ch = fenced[i]
+    if (escape) { escape = false; continue }
+    if (ch === "\\" && inString) { escape = true; continue }
+    if (ch === '"') { inString = !inString; continue }
+    if (inString) continue
+    if (ch === "{") {
+      if (depth === 0) start = i
+      depth++
+    } else if (ch === "}") {
+      depth--
+      if (depth === 0 && start >= 0) {
+        objects.push({ text: fenced.slice(start, i + 1), start })
+      }
+    }
+  }
+  const matching = objects.filter((candidate) => {
+    try {
+      const sanitized = sanitizeTrailingCommas(candidate.text)
+      const value = JSON.parse(sanitized)
+      if (typeof value !== "object" || value === null || Array.isArray(value)) return false
+      return requiredKeys.every((key) => key in value)
+    } catch {
+      return false
+    }
+  })
+  return matching.length === 1 ? matching[0].text : undefined
+}
+
 function sanitizeTrailingCommas(text: string): string {
   let result = ""
   let inString = false
@@ -175,10 +218,17 @@ function parseWorkReport(output: string): {
   report?: WorkReport
   error?: string
 } {
+  let jsonText: string | undefined
   const match = output.match(/<flow-work-report>\s*([\s\S]*?)\s*<\/flow-work-report>/)
-  if (!match) return { error: "missing <flow-work-report>" }
+  if (match) {
+    jsonText = match[1]
+  } else {
+    const untagged = extractUntaggedJson(output, ["status", "summary", "filesChanged", "verification"])
+    if (untagged) jsonText = untagged
+  }
+  if (!jsonText) return { error: "missing <flow-work-report>" }
   try {
-    const value = tolerantJson(match[1]) as Partial<WorkReport>
+    const value = tolerantJson(jsonText) as Partial<WorkReport>
     const validStatus = value.status === "completed" || value.status === "blocked"
     const validFiles = Array.isArray(value.filesChanged) && value.filesChanged.every((item) => typeof item === "string")
     const validScope = Array.isArray(value.scopeChanges) && value.scopeChanges.every((item) => typeof item === "string")
@@ -209,10 +259,17 @@ function parseWorkReport(output: string): {
 }
 
 function parseReviewReport(output: string, maximumFindings: number): { report?: ReviewReport; error?: string } {
+  let jsonText: string | undefined
   const match = output.match(/<flow-review>\s*([\s\S]*?)\s*<\/flow-review>/)
-  if (!match) return { error: "missing <flow-review>" }
+  if (match) {
+    jsonText = match[1]
+  } else {
+    const untagged = extractUntaggedJson(output, ["verdict", "summary", "findings"])
+    if (untagged) jsonText = untagged
+  }
+  if (!jsonText) return { error: "missing <flow-review>" }
   try {
-    const value = tolerantJson(match[1]) as Partial<ReviewReport>
+    const value = tolerantJson(jsonText) as Partial<ReviewReport>
     const validVerdict = value.verdict === "pass" || value.verdict === "changes-requested" || value.verdict === "blocked"
     const findings = value.findings
     const validFindings =
@@ -1011,7 +1068,10 @@ export default async function agentFlowsPlugin(input: any, options: PluginOption
             if (followupMissing.length > 0) throw new Error(`second review requires headings: ${followupMissing.join(", ")}`)
           }
           if (!description.includes("## Review Execution Contract"))
-            output.args.description = `${description}${REVIEW_REPORT_CONTRACT.replace("{MAX_FINDINGS}", String(reviewerPolicy.maxFindings))}`
+            output.args.description = `${description}${REVIEW_REPORT_CONTRACT
+              .replace("{CURRENT_ROUND}", String(priorReviews.length + 1))
+              .replace("{MAX_ROUNDS}", String(reviewerPolicy.maxRounds))
+              .replace("{MAX_FINDINGS}", String(reviewerPolicy.maxFindings))}`
         }
         const packetDescription = typeof output.args.description === "string" ? output.args.description : description
         const taskID = stableTaskID(description)
@@ -1023,6 +1083,22 @@ export default async function agentFlowsPlugin(input: any, options: PluginOption
           const maximum = options.verification?.maxWorkerAttempts ?? flow.verification.maxWorkerAttempts
           if (attempt >= maximum) throw new Error(`${delegated} reached the ${maximum}-attempt limit for task ${taskID}; escalate or ask the user`)
           taskAttempts.set(key, attempt + 1)
+          if (attempt > 0) {
+            const prior = [...tasks.values()].filter(
+              (t) => t.runID === run.id && t.agent === delegated && t.taskID === taskID,
+            ).sort((a, b) => b.startedAt - a.startedAt)[0]
+            if (prior) {
+              const contextParts: string[] = []
+              if (prior.status !== "running") contextParts.push(`status: ${prior.status}`)
+              if (prior.error) contextParts.push(`error: ${prior.error}`)
+              if (prior.workReport?.summary) contextParts.push(`summary: ${prior.workReport.summary}`)
+              if (prior.workReport?.blocker) contextParts.push(`blocker: ${prior.workReport.blocker}`)
+              if (prior.workReportError) contextParts.push(`report-error: ${prior.workReportError}`)
+              if (contextParts.length > 0) {
+                output.args.description = `${output.args.description}\n\n## Retry Context\nAttempt ${attempt + 1} of ${maximum} for Task ID ${taskID}. Prior attempt: ${contextParts.join("; ")}.`
+              }
+            }
+          }
         }
         if (flow.agentMetadata[delegated]?.requiresApproval && !approvals.get(root?.id ?? "")?.delete(delegated)) throw new Error(`${delegated} requires flow_approve_escalation before delegation`)
         tasks.set(toolInput.callID, {
@@ -1097,10 +1173,20 @@ export default async function agentFlowsPlugin(input: any, options: PluginOption
               note: result.report.summary.slice(0, 2_000),
               observedAt: Date.now(),
             })
+            const completedRoundCount = [...tasks.values()].filter(
+              (t) => t.runID === task.runID && t.agent === reviewerPolicy?.agent && t.reviewReport !== undefined,
+            ).length
+            const remainingRounds = (reviewerPolicy?.maxRounds ?? 2) - completedRoundCount
+            output.output += `\n\n[Flow: milestone review round ${completedRoundCount} of ${reviewerPolicy?.maxRounds ?? 2} is complete. Verdict: ${result.report.verdict}. ${remainingRounds > 0 ? `${remainingRounds} round(s) remaining.` : "Review budget exhausted."}]`
           } else {
             task.status = "invalid-output"
             task.reviewReportError = result.error
-            output.output += `\n\n[Flow guardrail: milestone review has invalid output because ${result.error}. Disclose that review was unavailable and perform one careful diff self-review; do not loop on review formatting.]`
+            const priorReviewCount = [...tasks.values()].filter(
+              (t) => t.runID === task.runID && t.agent === reviewerPolicy?.agent && t.id !== task.id,
+            ).length
+            const currentRound = priorReviewCount + 1
+            const remainingRounds = (reviewerPolicy?.maxRounds ?? 2) - currentRound
+            output.output += `\n\n[Flow guardrail: milestone review round ${currentRound} of ${reviewerPolicy?.maxRounds ?? 2} has invalid output because ${result.error}. ${remainingRounds > 0 ? `${remainingRounds} round(s) remaining. ` : ""}Disclose that review was unavailable and perform one careful diff self-review; do not loop on review formatting.]`
           }
         }
         const evidence = parseEvaluation(output.output, task.runID, task.sessionID)

@@ -352,6 +352,81 @@ describe("agent flows plugin", () => {
     expect(bad.output).toContain("Flow guardrail")
   })
 
+  test("accepts wrapperless untagged work report as unambiguous single JSON object", async () => {
+    const hooks: any = await plugin({ client: client() })
+    await hooks["chat.message"]?.({ sessionID: "root", agent: "orchestrator", messageID: "run" }, { message: { id: "run", role: "user", time: { created: Date.now() } } })
+    await hooks["tool.execute.before"]?.({ tool: "task", sessionID: "root", callID: "no-tags" }, { args: { subagent_type: "routine", description: workPacket } })
+    const output = { output: '{"status":"completed","summary":"untagged passed","filesChanged":["x.ts"],"verification":[],"scopeChanges":[],"blocker":"optional note"}' }
+    await hooks["tool.execute.after"]?.({ callID: "no-tags" }, output)
+    expect(output.output).not.toContain("Flow guardrail")
+  })
+
+  test("accepts code-fenced untagged work report as single JSON object", async () => {
+    const hooks: any = await plugin({ client: client() })
+    await hooks["chat.message"]?.({ sessionID: "root", agent: "orchestrator", messageID: "run" }, { message: { id: "run", role: "user", time: { created: Date.now() } } })
+    await hooks["tool.execute.before"]?.({ tool: "task", sessionID: "root", callID: "fence-only" }, { args: { subagent_type: "routine", description: workPacket } })
+    const output = { output: '```json\n{"status":"completed","summary":"fenced no tags","filesChanged":["y.ts"],"verification":[],"scopeChanges":[]}\n```\nHere is the result.' }
+    await hooks["tool.execute.after"]?.({ callID: "fence-only" }, output)
+    expect(output.output).not.toContain("Flow guardrail")
+  })
+
+  test("rejects wrapperless output with ambiguous multiple JSON objects", async () => {
+    const hooks: any = await plugin({ client: client() })
+    await hooks["chat.message"]?.({ sessionID: "root", agent: "orchestrator", messageID: "run" }, { message: { id: "run", role: "user", time: { created: Date.now() } } })
+    await hooks["tool.execute.before"]?.({ tool: "task", sessionID: "root", callID: "ambiguous" }, { args: { subagent_type: "routine", description: workPacket } })
+    const output = { output: '{"status":"completed","summary":"first","filesChanged":["a.ts"],"verification":[],"scopeChanges":[]}\nNot the report.\n{"status":"completed","summary":"second","filesChanged":["b.ts"],"verification":[],"scopeChanges":[]}' }
+    await hooks["tool.execute.after"]?.({ callID: "ambiguous" }, output)
+    expect(output.output).toContain("Flow guardrail")
+  })
+
+  test("accepts wrapperless untagged review report as single JSON object", async () => {
+    const hooks: any = await plugin({ client: client() })
+    await hooks["chat.message"]?.({ sessionID: "root", agent: "orchestrator", messageID: "run" }, { message: { id: "run", role: "user", time: { created: Date.now() } } })
+    await hooks["tool.execute.before"]?.({ tool: "task", sessionID: "root", callID: "rev-untagged" }, { args: { subagent_type: "reviewer", description: reviewPacket } })
+    const output = { output: '{"verdict":"pass","summary":"no tags","findings":[]}' }
+    await hooks["tool.execute.after"]?.({ callID: "rev-untagged" }, output)
+    expect(output.output).not.toContain("Flow guardrail")
+    expect(output.output).toContain("round 1 of 2")
+  })
+
+  test("reviewer guardrail feedback includes current round and remaining rounds", async () => {
+    const hooks: any = await plugin({ client: client() })
+    await hooks["chat.message"]?.({ sessionID: "root", agent: "orchestrator", messageID: "run" }, { message: { id: "run", role: "user", time: { created: Date.now() } } })
+    await hooks["tool.execute.before"]?.({ tool: "task", sessionID: "root", callID: "rev-fail" }, { args: { subagent_type: "reviewer", description: reviewPacket } })
+    const output = { output: "nonsense" }
+    await hooks["tool.execute.after"]?.({ callID: "rev-fail" }, output)
+    expect(output.output).toContain("round 1 of 2")
+    expect(output.output).toContain("1 round(s) remaining")
+  })
+
+  test("retry packets get compact prior-attempt context", async () => {
+    const hooks: any = await plugin({
+      client: {
+        session: {
+          get: async () => ({ data: { id: "root" } }),
+          children: async () => ({ data: [] }),
+          messages: async () => ({ data: [] }),
+        },
+      },
+    })
+    await hooks["chat.message"]?.({ sessionID: "root", agent: "orchestrator", messageID: "run" }, { message: { id: "run", role: "user", time: { created: Date.now() } } })
+    const args = { subagent_type: "routine", description: `# Task ID: retry-context\n${workPacket}` }
+    await hooks["tool.execute.before"]?.({ tool: "task", sessionID: "root", callID: "rc1" }, { args })
+    await hooks["tool.execute.after"]?.({ callID: "rc1" }, { output: '<flow-work-report>{"status":"completed","summary":"attempt 1 worked but missed edge case","filesChanged":["x.ts"],"verification":[],"scopeChanges":[]}</flow-work-report>' })
+    const args2 = { subagent_type: "routine", description: `# Task ID: retry-context\n${workPacket}` }
+    await hooks["tool.execute.before"]?.({ tool: "task", sessionID: "root", callID: "rc2" }, { args: args2 })
+    expect(args2.description).toContain("Retry Context")
+    expect(args2.description).toContain("Attempt 2 of 2 for Task ID retry-context")
+  })
+
+  test("review contract text includes round placeholders", async () => {
+    const hooks: any = await plugin({ client: client() })
+    await hooks["chat.message"]?.({ sessionID: "root", agent: "orchestrator", messageID: "run" }, { message: { id: "run", role: "user", time: { created: Date.now() } } })
+    const firstReview = { subagent_type: "reviewer", description: reviewPacket }
+    await hooks["tool.execute.before"]?.({ tool: "task", sessionID: "root", callID: "rev1" }, { args: firstReview })
+    expect(firstReview.description).toContain("round 1 of 2")
+  })
+
   test("rejects reports with no filesChanged or verification", async () => {
     const hooks: any = await plugin({ client: client() })
     await hooks["chat.message"]?.({ sessionID: "root", agent: "orchestrator", messageID: "run" }, { message: { id: "run", role: "user", time: { created: Date.now() } } })
