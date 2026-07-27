@@ -223,7 +223,7 @@ describe("model-independent telemetry", () => {
     )
     await hooks["tool.execute.after"]?.(
       { tool: "task", sessionID: "root", callID: "task-1", args: {} },
-      { output: 'complete\n<flow-work-report>{"status":"completed","summary":"done","filesChanged":[],"verification":[],"scopeChanges":[]}</flow-work-report>', metadata: {} },
+      { output: 'complete\n<flow-work-report>{"status":"completed","summary":"done","filesChanged":["fake.ts"],"verification":[],"scopeChanges":[]}</flow-work-report>', metadata: {} },
     )
     await hooks["tool.execute.before"]?.(
       { tool: "task", sessionID: "root", callID: "task-failed" },
@@ -286,7 +286,7 @@ describe("model-independent telemetry", () => {
       const hooks: any = await plugin({ client }, { telemetry: { reportDir: directory, runSummaryToast: false } })
       await hooks["chat.message"]?.({ sessionID: "root", agent: "orchestrator", messageID: runID }, { message: { id: runID, role: "user", time: { created: createdAt } } })
       await hooks["tool.execute.before"]?.({ tool: "task", sessionID: "root", callID: taskID }, { args: { subagent_type: "routine", description: `# Task ID: ${taskID}\n${workPacket}` } })
-      await hooks["tool.execute.after"]?.({ callID: taskID }, { output: '<flow-work-report>{"status":"completed","summary":"done","filesChanged":[],"verification":[],"scopeChanges":[]}</flow-work-report>' })
+      await hooks["tool.execute.after"]?.({ callID: taskID }, { output: '<flow-work-report>{"status":"completed","summary":"done","filesChanged":["fake.ts"],"verification":[],"scopeChanges":[]}</flow-work-report>' })
       await hooks.event?.({ event: { type: "session.idle", properties: { sessionID: "root" } } })
       createdAt += 100
     }

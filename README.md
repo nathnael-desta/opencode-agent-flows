@@ -91,7 +91,7 @@ versions:
   "plugin": [
     "opencode-commandcode-provider@0.1.0",
     [
-      "opencode-agent-flows@0.1.0",
+      "opencode-agent-flows@0.2.0",
       { "flow": "openai-commandcode-router", "setDefault": true }
     ]
   ],

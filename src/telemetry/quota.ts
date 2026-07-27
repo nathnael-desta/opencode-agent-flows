@@ -81,7 +81,7 @@ export async function readCodexQuota(timeoutMs = 5_000): Promise<QuotaSnapshot> 
     child.stdin.write(`${JSON.stringify({
       id: 1,
       method: "initialize",
-      params: { clientInfo: { name: "opencode-agent-flows", version: "0.1.0" }, capabilities: null },
+      params: { clientInfo: { name: "opencode-agent-flows", version: "0.2.0" }, capabilities: null },
     })}\n`)
   })
 }

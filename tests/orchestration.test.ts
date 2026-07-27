@@ -120,6 +120,15 @@ describe("buildFlowFromConfig", () => {
     expect(flow.reviewer?.enabled).toBe(false)
     expect(flow.reviewer?.maxRounds).toBe(1)
   })
+
+  test("generated orchestrator prompt matches built-in policy for direct fixes, consolidation, skills, and escalation", () => {
+    const flow = buildFlowFromConfig(minimal)
+    const prompt = flow.agents.orchestrator.prompt as string
+    expect(prompt).toContain("Reserve direct edits for truly trivial corrections")
+    expect(prompt).toContain("Consolidate multiple review requests")
+    expect(prompt).toContain("Skills suggest")
+    expect(prompt).toContain("first re-delegate the same Task ID")
+  })
 })
 
 describe("dashboard orchestration panel", () => {

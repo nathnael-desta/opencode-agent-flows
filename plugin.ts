@@ -132,6 +132,45 @@ function missingPacketHeadings(description: string, headings: string[]): string[
   return headings.filter((heading) => !new RegExp(`(?:^|\\n)\\s{0,3}(?:#+\\s*)?(?:\\*\\*)?${heading}(?:\\*\\*)?\\s*:?(?:\\s*\\n|\\s+\\S)`, "im").test(description))
 }
 
+function tolerantJson(raw: string): unknown {
+  let sanitized = raw
+    .replace(/^```(?:json|JAVASCRIPT|javascript)?\s*\n?/, "")
+    .replace(/\n?\s*```\s*$/, "")
+  sanitized = sanitizeTrailingCommas(sanitized)
+  return JSON.parse(sanitized)
+}
+
+function sanitizeTrailingCommas(text: string): string {
+  let result = ""
+  let inString = false
+  let escape = false
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]
+    result += ch
+    if (escape) {
+      escape = false
+      continue
+    }
+    if (ch === "\\" && inString) {
+      escape = true
+      continue
+    }
+    if (ch === '"') {
+      inString = !inString
+    }
+    if (!inString && ch === ",") {
+      const rest = text.slice(i + 1)
+      const close = rest.match(/^\s*([}\]])/)
+      if (close) {
+        result = result.slice(0, -1) + close[1]
+        i += close[0].length
+        continue
+      }
+    }
+  }
+  return result
+}
+
 function parseWorkReport(output: string): {
   report?: WorkReport
   error?: string
@@ -139,7 +178,7 @@ function parseWorkReport(output: string): {
   const match = output.match(/<flow-work-report>\s*([\s\S]*?)\s*<\/flow-work-report>/)
   if (!match) return { error: "missing <flow-work-report>" }
   try {
-    const value = JSON.parse(match[1]) as Partial<WorkReport>
+    const value = tolerantJson(match[1]) as Partial<WorkReport>
     const validStatus = value.status === "completed" || value.status === "blocked"
     const validFiles = Array.isArray(value.filesChanged) && value.filesChanged.every((item) => typeof item === "string")
     const validScope = Array.isArray(value.scopeChanges) && value.scopeChanges.every((item) => typeof item === "string")
@@ -150,18 +189,22 @@ function parseWorkReport(output: string): {
       )
     if (!validStatus || typeof value.summary !== "string" || !validFiles || !validScope || !validVerification || (value.blocker !== undefined && typeof value.blocker !== "string"))
       return { error: "invalid <flow-work-report> schema" }
+    const files = value.filesChanged as string[]
+    const verification = value.verification as WorkReport["verification"]
+    if (files.length === 0 && verification.length === 0)
+      return { error: "<flow-work-report> requires filesChanged or verification evidence" }
     return {
       report: {
         status: value.status as WorkReport["status"],
         summary: value.summary,
-        filesChanged: value.filesChanged as string[],
-        verification: value.verification as WorkReport["verification"],
+        filesChanged: files,
+        verification,
         scopeChanges: value.scopeChanges as string[],
         blocker: value.blocker,
       },
     }
   } catch {
-    return { error: "invalid JSON in <flow-work-report>" }
+    return { error: "malformed JSON in <flow-work-report> (check for trailing commas, unquoted strings, or missing braces)" }
   }
 }
 
@@ -169,7 +212,7 @@ function parseReviewReport(output: string, maximumFindings: number): { report?: 
   const match = output.match(/<flow-review>\s*([\s\S]*?)\s*<\/flow-review>/)
   if (!match) return { error: "missing <flow-review>" }
   try {
-    const value = JSON.parse(match[1]) as Partial<ReviewReport>
+    const value = tolerantJson(match[1]) as Partial<ReviewReport>
     const validVerdict = value.verdict === "pass" || value.verdict === "changes-requested" || value.verdict === "blocked"
     const findings = value.findings
     const validFindings =
@@ -191,7 +234,7 @@ function parseReviewReport(output: string, maximumFindings: number): { report?: 
     if (value.verdict !== "pass" && findings!.length === 0) return { error: "non-passing <flow-review> requires findings" }
     return { report: value as ReviewReport }
   } catch {
-    return { error: "invalid JSON in <flow-review>" }
+    return { error: "malformed JSON in <flow-review> (check for trailing commas, unquoted strings, or missing braces)" }
   }
 }
 
@@ -914,10 +957,11 @@ export default async function agentFlowsPlugin(input: any, options: PluginOption
       if (chatInput.agent) sessionAgents.set(chatInput.sessionID, chatInput.agent)
       const root = await resolveRoot(chatInput.sessionID)
       if (!root || root.id !== chatInput.sessionID || chatInput.agent !== flow.defaultAgent) return
+      const existing = activeRuns.get(root.id)
       activeRuns.set(root.id, {
-        id: chatInput.messageID ?? output.message.id ?? crypto.randomUUID(),
+        id: existing?.id ?? (chatInput.messageID ?? output.message.id ?? crypto.randomUUID()),
         rootSessionID: root.id,
-        startedAt: output.message.time?.created ?? Date.now(),
+        startedAt: existing?.startedAt ?? (output.message.time?.created ?? Date.now()),
       })
     },
     "experimental.chat.system.transform": async (systemInput: { sessionID?: string }, output: { system: string[] }) => {

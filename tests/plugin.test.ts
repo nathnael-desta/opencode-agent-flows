@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import plugin from "../plugin.js"
@@ -153,9 +153,9 @@ describe("agent flows plugin", () => {
     )
     const args = { subagent_type: "routine", description: workPacket }
     await hooks["tool.execute.before"]?.({ tool: "task", sessionID: "root", callID: "one" }, { args })
-    await hooks["tool.execute.after"]?.({ callID: "one" }, { output: '<flow-work-report>{"status":"completed","summary":"first","filesChanged":[],"verification":[],"scopeChanges":[]}</flow-work-report>' })
+    await hooks["tool.execute.after"]?.({ callID: "one" }, { output: '<flow-work-report>{"status":"completed","summary":"first","filesChanged":["fake.ts"],"verification":[],"scopeChanges":[]}</flow-work-report>' })
     await hooks["tool.execute.before"]?.({ tool: "task", sessionID: "root", callID: "two" }, { args })
-    await hooks["tool.execute.after"]?.({ callID: "two" }, { output: '<flow-work-report>{"status":"completed","summary":"second","filesChanged":[],"verification":[],"scopeChanges":[]}</flow-work-report>' })
+    await hooks["tool.execute.after"]?.({ callID: "two" }, { output: '<flow-work-report>{"status":"completed","summary":"second","filesChanged":["fake.ts"],"verification":[],"scopeChanges":[]}</flow-work-report>' })
 
     await expect(
       hooks["tool.execute.before"]?.({ tool: "task", sessionID: "root", callID: "three" }, { args }),
@@ -169,7 +169,7 @@ describe("agent flows plugin", () => {
       { tool: "task", sessionID: "root", callID: "one" },
       { args: { subagent_type: "routine", description: `# Task ID: parser-fix\n${workPacket}` } },
     )
-    await hooks["tool.execute.after"]?.({ callID: "one" }, { output: '<flow-work-report>{"status":"completed","summary":"done","filesChanged":[],"verification":[],"scopeChanges":[]}</flow-work-report>' })
+    await hooks["tool.execute.after"]?.({ callID: "one" }, { output: '<flow-work-report>{"status":"completed","summary":"done","filesChanged":["fake.ts"],"verification":[],"scopeChanges":[]}</flow-work-report>' })
     await expect(hooks["tool.execute.before"]?.(
       { tool: "task", sessionID: "root", callID: "two" },
       { args: { subagent_type: "routine", description: `# Task ID: parser-fix\n${workPacket.replace("requested behavior", "same parser behavior with different wording")}` } },
@@ -184,9 +184,9 @@ describe("agent flows plugin", () => {
     await hooks["chat.message"]?.({ sessionID: "root", agent: "orchestrator", messageID: "run" }, { message: { id: "run", role: "user", time: { created: Date.now() } } })
     await hooks["tool.execute.before"]?.({ tool: "task", sessionID: "root", callID: "one" }, { args: { subagent_type: "routine", description: `# Task ID: one\n${workPacket}` } })
     await expect(hooks["tool.execute.before"]?.({ tool: "task", sessionID: "root", callID: "concurrent" }, { args: { subagent_type: "routine", description: `# Task ID: two\n${workPacket}` } })).rejects.toThrow("concurrency limit")
-    await hooks["tool.execute.after"]?.({ callID: "one" }, { output: '<flow-work-report>{"status":"completed","summary":"done","filesChanged":[],"verification":[],"scopeChanges":[]}</flow-work-report>' })
+    await hooks["tool.execute.after"]?.({ callID: "one" }, { output: '<flow-work-report>{"status":"completed","summary":"done","filesChanged":["fake.ts"],"verification":[],"scopeChanges":[]}</flow-work-report>' })
     await hooks["tool.execute.before"]?.({ tool: "task", sessionID: "root", callID: "two" }, { args: { subagent_type: "routine", description: `# Task ID: two\n${workPacket}` } })
-    await hooks["tool.execute.after"]?.({ callID: "two" }, { output: '<flow-work-report>{"status":"completed","summary":"done","filesChanged":[],"verification":[],"scopeChanges":[]}</flow-work-report>' })
+    await hooks["tool.execute.after"]?.({ callID: "two" }, { output: '<flow-work-report>{"status":"completed","summary":"done","filesChanged":["fake.ts"],"verification":[],"scopeChanges":[]}</flow-work-report>' })
     await expect(hooks["tool.execute.before"]?.({ tool: "task", sessionID: "root", callID: "three" }, { args: { subagent_type: "routine", description: `# Task ID: three\n${workPacket}` } })).rejects.toThrow("2-task delegation budget")
   })
 
@@ -304,4 +304,117 @@ describe("agent flows plugin", () => {
     ).rejects.toThrow("read-only")
   })
 
+  test("normalizes work reports with markdown fences and trailing commas", async () => {
+    const hooks: any = await plugin({ client: client() })
+    await hooks["chat.message"]?.({ sessionID: "root", agent: "orchestrator", messageID: "run" }, { message: { id: "run", role: "user", time: { created: Date.now() } } })
+    await hooks["tool.execute.before"]?.({ tool: "task", sessionID: "root", callID: "fenced" }, { args: { subagent_type: "routine", description: workPacket } })
+    const fenced = { output: '```json\n<flow-work-report>{"status":"completed","summary":"done","filesChanged":["a.ts"],"verification":[],"scopeChanges":[],}\n</flow-work-report>\n```' }
+    await hooks["tool.execute.after"]?.({ callID: "fenced" }, fenced)
+    expect(fenced.output).not.toContain("Flow guardrail")
+  })
+
+  test("preserves commas inside JSON string values through normalization", async () => {
+    const hooks: any = await plugin({ client: client() })
+    await hooks["chat.message"]?.({ sessionID: "root", agent: "orchestrator", messageID: "run" }, { message: { id: "run", role: "user", time: { created: Date.now() } } })
+    await hooks["tool.execute.before"]?.({ tool: "task", sessionID: "root", callID: "string-comma" }, { args: { subagent_type: "routine", description: workPacket } })
+    const output = { output: '<flow-work-report>{"status":"completed","summary":"still,working","filesChanged":["x.ts"],"verification":[],"scopeChanges":[],}</flow-work-report>' }
+    await hooks["tool.execute.after"]?.({ callID: "string-comma" }, output)
+    expect(output.output).not.toContain("Flow guardrail")
+  })
+
+  test("understands JAVASCRIPT markdown fences", async () => {
+    const hooks: any = await plugin({ client: client() })
+    await hooks["chat.message"]?.({ sessionID: "root", agent: "orchestrator", messageID: "run" }, { message: { id: "run", role: "user", time: { created: Date.now() } } })
+    await hooks["tool.execute.before"]?.({ tool: "task", sessionID: "root", callID: "jsfence" }, { args: { subagent_type: "routine", description: workPacket } })
+    const fenced = { output: '```JAVASCRIPT\n<flow-work-report>{"status":"completed","summary":"done","filesChanged":["a.ts"],"verification":[],"scopeChanges":[]}\n</flow-work-report>\n```' }
+    await hooks["tool.execute.after"]?.({ callID: "jsfence" }, fenced)
+    expect(fenced.output).not.toContain("Flow guardrail")
+  })
+
+  test("normalizes review reports with trailing commas in findings", async () => {
+    const hooks: any = await plugin({ client: client() })
+    await hooks["chat.message"]?.({ sessionID: "root", agent: "orchestrator", messageID: "run" }, { message: { id: "run", role: "user", time: { created: Date.now() } } })
+    await hooks["tool.execute.before"]?.({ tool: "task", sessionID: "root", callID: "review" }, { args: { subagent_type: "reviewer", description: reviewPacket } })
+    const output = { output: '<flow-review>{"verdict":"changes-requested","summary":"one","findings":[{"severity":"high","title":"Bug","evidence":"crash",}]}</flow-review>' }
+    await hooks["tool.execute.after"]?.({ callID: "review" }, output)
+    expect(output.output).not.toContain("Flow guardrail")
+  })
+
+  test("rejects substantively invalid schemas even after normalization", async () => {
+    const hooks: any = await plugin({ client: client() })
+    await hooks["chat.message"]?.({ sessionID: "root", agent: "orchestrator", messageID: "run" }, { message: { id: "run", role: "user", time: { created: Date.now() } } })
+    await hooks["tool.execute.before"]?.({ tool: "task", sessionID: "root", callID: "bad" }, { args: { subagent_type: "routine", description: workPacket } })
+    const bad = { output: '<flow-work-report>{"status":"ok","summary":"wrong"}</flow-work-report>' }
+    await hooks["tool.execute.after"]?.({ callID: "bad" }, bad)
+    expect(bad.output).toContain("Flow guardrail")
+  })
+
+  test("rejects reports with no filesChanged or verification", async () => {
+    const hooks: any = await plugin({ client: client() })
+    await hooks["chat.message"]?.({ sessionID: "root", agent: "orchestrator", messageID: "run" }, { message: { id: "run", role: "user", time: { created: Date.now() } } })
+    await hooks["tool.execute.before"]?.({ tool: "task", sessionID: "root", callID: "empty" }, { args: { subagent_type: "routine", description: workPacket } })
+    const output = { output: '<flow-work-report>{"status":"completed","summary":"nothing","filesChanged":[],"verification":[],"scopeChanges":[]}</flow-work-report>' }
+    await hooks["tool.execute.after"]?.({ callID: "empty" }, output)
+    expect(output.output).toContain("Flow guardrail")
+  })
+
+  test("preserves startedAt timing across repeated root-session messages", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "agent-flow-timing-"))
+    temporaryDirectories.push(directory)
+    const createdAt = Date.now() - 10_000
+    const hooks: any = await plugin({
+      client: {
+        session: {
+          get: async () => ({ data: { id: "root" } }),
+          children: async () => ({ data: [] }),
+          messages: async () => ({ data: [
+            { info: { id: "first", role: "user", agent: "orchestrator", time: { created: createdAt } } },
+            { info: { id: "assistant", role: "assistant", agent: "orchestrator", providerID: "openai", modelID: "gpt", tokens: { input: 1, output: 1 }, time: { created: createdAt + 1 } } },
+          ] }),
+        },
+        tui: { showToast: async () => {} },
+      },
+    }, { telemetry: { reportDir: directory, runSummaryToast: false } })
+
+    await hooks["chat.message"]?.(
+      { sessionID: "root", agent: "orchestrator", messageID: "first" },
+      { message: { id: "first", role: "user", time: { created: createdAt } } },
+    )
+    const originalStartedAt = createdAt
+
+    await hooks["chat.message"]?.(
+      { sessionID: "root", agent: "orchestrator", messageID: "second" },
+      { message: { id: "second", role: "user", time: { created: createdAt + 2000 } } },
+    )
+
+    await hooks["chat.message"]?.(
+      { sessionID: "root", agent: "orchestrator", messageID: "third" },
+      { message: { id: "third", role: "user", time: { created: createdAt + 4000 } } },
+    )
+
+    await hooks["tool.execute.before"]?.(
+      { tool: "task", sessionID: "root", callID: "timing-task" },
+      { args: { subagent_type: "routine", description: workPacket } },
+    )
+    await hooks["tool.execute.after"]?.(
+      { callID: "timing-task" },
+      { output: '<flow-work-report>{"status":"completed","summary":"done","filesChanged":["fake.ts"],"verification":[],"scopeChanges":[]}</flow-work-report>' },
+    )
+    await hooks.event?.({ event: { type: "session.idle", properties: { sessionID: "root" } } })
+
+    const report = JSON.parse(await readFile(join(directory, "latest-run.json"), "utf8"))
+    expect(report.startedAt).toBe(originalStartedAt)
+    expect(report.durationMs).toBeGreaterThan(0)
+  })
+
+  test("orchestrator prompts contain consolidation, skill, and direct-fix guidance", async () => {
+    const hooks = await plugin({}, { flow: "openai-commandcode-router", setDefault: true })
+    const config: Record<string, any> = {}
+    await hooks.config(config)
+    const prompt = config.agent.orchestrator.prompt as string
+    expect(prompt).toContain("Skills suggest")
+    expect(prompt).toContain("Consolidate multiple review requests")
+    expect(prompt).toContain("Reserve direct edits for truly trivial corrections")
+    expect(prompt).toContain("first re-delegate the same Task ID")
+  })
 })
