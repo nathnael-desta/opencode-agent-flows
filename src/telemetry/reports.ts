@@ -3,6 +3,7 @@ import type { TokenRates } from "./types.js"
 import { computeApiEquivalentCost, lookupRate } from "./pricing.js"
 import type {
   AgentUsage,
+  AntigravityTrace,
   FlowReport,
   GlobalReport,
   MessageUsage,
@@ -42,6 +43,10 @@ const emptyTotals = (): ReportTotals => ({
   apiEquivalentUnpricedCalls: 0,
   workloadUnits: 0,
   tokens: emptyTokens(),
+  antigravityCalls: 0,
+  antigravityForeground: 0,
+  antigravityBackground: 0,
+  antigravityVision: 0,
 })
 
 function addTokens(target: TokenUsage, source: TokenUsage): void {
@@ -82,6 +87,7 @@ export interface BuildReportInput {
   displacementEfficiency?: number
   pricing?: Record<string, TokenRates>
   developerMode?: FlowReport["developerMode"]
+  antigravityCalls?: AntigravityTrace[]
 }
 
 export function buildFlowReport(input: BuildReportInput): FlowReport {
@@ -242,9 +248,16 @@ export function buildFlowReport(input: BuildReportInput): FlowReport {
   const estimatedReduction = Math.min(observedOffload * displacementEfficiency, 0.95)
   const taskConfidences = new Set(tasks.map((task) => task.linkConfidence))
   const quotaSnapshots = input.quotas ?? []
+  const antigravityCalls = (input.antigravityCalls ?? []).filter((call) =>
+    includedSessionIDs.has(call.sessionID) && (!input.runID || call.runID === input.runID),
+  )
+  totals.antigravityCalls = antigravityCalls.length
+  totals.antigravityForeground = antigravityCalls.filter((c) => c.type === "foreground").length
+  totals.antigravityBackground = antigravityCalls.filter((c) => c.type === "background").length
+  totals.antigravityVision = antigravityCalls.filter((c) => c.type === "vision").length
 
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     scope: input.runID ? "run" : "session",
     generatedAt: new Date().toISOString(),
     flowID: input.flow.id,
@@ -282,6 +295,7 @@ export function buildFlowReport(input: BuildReportInput): FlowReport {
     quotas: quotaSnapshots,
     pricingSource: pricing,
     developerMode: input.developerMode,
+    antigravityCalls,
     estimate: {
       observedBaselineOffloadPct: round(observedOffload * 100),
       estimatedBaselineUsageReductionPct: round(estimatedReduction * 100),
@@ -308,6 +322,7 @@ function addTotals(target: ReportTotals, source: ReportTotals): void {
     "verificationRuns", "verificationFailures", "retries", "readOnlyTasks", "sharedWriteTasks", "integrationTasks", "frontierOverlaps",
     "costUsd", "evaluatorCostUsd",
     "apiEquivalentCostUsd", "evaluatorApiEquivalentCostUsd", "apiEquivalentPricedCalls", "apiEquivalentUnpricedCalls", "workloadUnits",
+    "antigravityCalls", "antigravityForeground", "antigravityBackground", "antigravityVision",
   ] as const) target[key] += source[key] ?? (key === "assistantMessages" ? source.calls : 0)
   addTokens(target.tokens, source.tokens)
 }

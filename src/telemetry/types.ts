@@ -75,6 +75,22 @@ export interface AgentUsage {
   workloadUnits: number
 }
 
+export type AntigravityCallType = "foreground" | "background" | "vision"
+
+export interface AntigravityTrace {
+  id: string
+  callID: string
+  sessionID: string
+  runID?: string
+  type: AntigravityCallType
+  tool: string
+  model?: string
+  status: "running" | "completed" | "failed"
+  startedAt: number
+  completedAt?: number
+  durationMs?: number
+}
+
 export interface TaskTrace {
   id: string
   callID: string
@@ -191,10 +207,14 @@ export interface ReportTotals {
   apiEquivalentUnpricedCalls: number
   workloadUnits: number
   tokens: TokenUsage
+  antigravityCalls: number
+  antigravityForeground: number
+  antigravityBackground: number
+  antigravityVision: number
 }
 
 export interface FlowReport {
-  schemaVersion: 5
+  schemaVersion: 6
   scope: "run" | "session"
   generatedAt: string
   flowID: string
@@ -213,6 +233,7 @@ export interface FlowReport {
   quotas: QuotaSnapshot[]
   pricingSource: Record<string, TokenRates>
   developerMode?: DeveloperModeSnapshot
+  antigravityCalls: AntigravityTrace[]
   estimate: {
     observedBaselineOffloadPct: number
     estimatedBaselineUsageReductionPct: number

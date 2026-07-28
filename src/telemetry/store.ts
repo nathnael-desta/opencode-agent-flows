@@ -38,11 +38,21 @@ function withParallelismTotals<T extends Record<string, unknown>>(totals: T): T 
 function upgradeFlowReport(raw: unknown): FlowReport | undefined {
   if (typeof raw !== "object" || raw === null) return undefined
   const report = raw as { schemaVersion?: unknown; totals?: unknown } & Record<string, unknown>
-  if ((report.schemaVersion !== 4 && report.schemaVersion !== 5) || typeof report.totals !== "object" || report.totals === null) return undefined
+  if (report.schemaVersion !== 4 && report.schemaVersion !== 5 && report.schemaVersion !== 6) return undefined
+  if (typeof report.totals !== "object" || report.totals === null) return undefined
+  const totals = withParallelismTotals(report.totals as Record<string, unknown>)
+  if (report.schemaVersion === 4 || report.schemaVersion === 5) {
+    // v4/v5 → v6: add antigravity tracking defaults.
+    ;(totals as Record<string, number>).antigravityCalls = (totals as Record<string, number>).antigravityCalls ?? 0
+    ;(totals as Record<string, number>).antigravityForeground = (totals as Record<string, number>).antigravityForeground ?? 0
+    ;(totals as Record<string, number>).antigravityBackground = (totals as Record<string, number>).antigravityBackground ?? 0
+    ;(totals as Record<string, number>).antigravityVision = (totals as Record<string, number>).antigravityVision ?? 0
+  }
   return {
     ...report,
-    schemaVersion: 5,
-    totals: withParallelismTotals(report.totals as Record<string, unknown>) as unknown as ReportTotals,
+    schemaVersion: 6,
+    totals: totals as unknown as ReportTotals,
+    antigravityCalls: Array.isArray(report.antigravityCalls) ? report.antigravityCalls : [],
   } as FlowReport
 }
 

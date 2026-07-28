@@ -26,7 +26,7 @@ import { normalizePricing } from "./src/telemetry/pricing.js"
 import { commandCodeBudget, readCodexQuota } from "./src/telemetry/quota.js"
 import { buildFlowReport } from "./src/telemetry/reports.js"
 import { TelemetryStore } from "./src/telemetry/store.js"
-import type { DeveloperModeSnapshot, QualityEvidence, ReviewReport, TaskTrace, VerificationEvidence, WorkReport } from "./src/telemetry/types.js"
+import type { DeveloperModeSnapshot, QualityEvidence, ReviewReport, TaskTrace, VerificationEvidence, WorkReport, AntigravityTrace } from "./src/telemetry/types.js"
 import { flowReportMarkdown, globalReportMarkdown } from "./src/telemetry/markdown.js"
 
 interface RunState {
@@ -462,6 +462,16 @@ function evaluatorAgent(baseline: AgentDefinition, instruction: string, source: 
 
 const DEFAULT_FLOW = "openai-commandcode-router"
 
+const ANTIGRAVITY_TOOLS: Record<string, import("./src/telemetry/types.js").AntigravityCallType> = {
+  antigravity_delegate: "foreground",
+  antigravity_background_start: "background",
+  antigravity_vision: "vision",
+}
+
+function antigravityCallType(tool: string): import("./src/telemetry/types.js").AntigravityCallType | undefined {
+  return ANTIGRAVITY_TOOLS[tool]
+}
+
 /**
  * Resolve the active flow. A broken custom configuration degrades to the
  * built-in flow rather than throwing: this function runs before the hooks
@@ -552,6 +562,7 @@ export default async function agentFlowsPlugin(input: any, options: PluginOption
   const quality: QualityEvidence[] = []
   const approvals = new Map<string, Set<string>>()
   const shadowedAgents: string[] = []
+  const antigravityCalls: AntigravityTrace[] = []
 
   async function resolveRoot(sessionID: string): Promise<SessionInfo | undefined> {
     let session = (await input.client?.session?.get({ path: { id: sessionID } }))?.data as SessionInfo | undefined
@@ -627,6 +638,7 @@ export default async function agentFlowsPlugin(input: any, options: PluginOption
         displacementEfficiency: telemetryOptions.displacementEfficiency ?? options.displacementEfficiency ?? 0.75,
         pricing: normalizePricing(telemetryOptions.apiEquivalentPricing),
         developerMode,
+        antigravityCalls: [...antigravityCalls],
       }
       const runReport = buildFlowReport({
         ...shared,
@@ -643,6 +655,7 @@ export default async function agentFlowsPlugin(input: any, options: PluginOption
         tasks: uniqueByID(sessionRuns.flatMap((item) => item.tasks)),
         verification: uniqueByID(sessionRuns.flatMap((item) => item.verification)),
         quality: uniqueByID(sessionRuns.flatMap((item) => item.quality)),
+        antigravityCalls: uniqueByID(sessionRuns.flatMap((item) => item.antigravityCalls ?? [])),
       }))
       if (telemetryOptions.runSummaryToast ?? options.usageToast ?? true)
         await input.client.tui?.showToast({
@@ -1050,6 +1063,22 @@ export default async function agentFlowsPlugin(input: any, options: PluginOption
     "tool.execute.before": async (toolInput: { tool: string; sessionID: string; callID: string }, output: { args: Record<string, unknown> }) => {
       const root = await resolveRoot(toolInput.sessionID)
       const run = root ? activeRuns.get(root.id) : undefined
+
+      const antigravityType = antigravityCallType(toolInput.tool)
+      if (antigravityType) {
+        antigravityCalls.push({
+          id: crypto.randomUUID(),
+          callID: toolInput.callID,
+          sessionID: toolInput.sessionID,
+          runID: run?.id,
+          type: antigravityType,
+          tool: toolInput.tool,
+          model: typeof output.args.model === "string" ? output.args.model : undefined,
+          status: "running",
+          startedAt: Date.now(),
+        })
+      }
+
       const agent = sessionAgents.get(toolInput.sessionID)
       const role = agent ? metadata[agent]?.role : undefined
       if ((role === "evaluator" || role === "reviewer") && ["edit", "write", "apply_patch", "bash", "task"].includes(toolInput.tool))
@@ -1057,6 +1086,9 @@ export default async function agentFlowsPlugin(input: any, options: PluginOption
       if (toolInput.tool === "task") {
         const delegated = String(output.args.subagent_type ?? output.args.agent ?? "unknown")
         const description = typeof output.args.description === "string" ? output.args.description : ""
+        const prompt = typeof output.args.prompt === "string" ? output.args.prompt : ""
+        const packet = prompt || description
+        const packetField = prompt ? "prompt" : "description"
         const delegatedRole = metadata[delegated]?.role
         const runTasks = [...tasks.values()].filter((task) => task.runID === run?.id)
         let execClass: ExecutionClass | undefined
@@ -1064,10 +1096,10 @@ export default async function agentFlowsPlugin(input: any, options: PluginOption
         if (run && runTasks.length >= orchestrationPolicy.maxTasksPerRun)
           throw new Error(`run reached the ${orchestrationPolicy.maxTasksPerRun}-task delegation budget; return a partial result or ask the user`)
         if (agent === flow.defaultAgent && (delegatedRole === "worker" || delegatedRole === "bulk-worker")) {
-          execClass = parseExecutionClass(description)
+          execClass = parseExecutionClass(packet)
           if (execClass === undefined)
             throw new Error(`worker task must declare an Execution Class: read-only, shared-write, or integration; add an "Execution Class" heading to the packet`)
-          expectedScope = parseExpectedScope(description)
+          expectedScope = parseExpectedScope(packet)
           if (!expectedScope || expectedScope.length === 0)
             throw new Error("worker task must supply a non-empty Expected Scope: a comma/semicolon-separated path or directory pattern manifest (e.g. src/**/*.ts, src/parser.ts)")
           const runningWorkerTasks = runTasks.filter((task) =>
@@ -1087,36 +1119,36 @@ export default async function agentFlowsPlugin(input: any, options: PluginOption
             if (runningWorkerTasks.length > 0)
               throw new Error("shared-write and integration tasks must run one at a time; wait for the current worker to finish")
           }
-          if (delegatedRole === "worker" && description.length > MAX_WORK_PACKET_CHARS)
+          if (delegatedRole === "worker" && packet.length > MAX_WORK_PACKET_CHARS)
             throw new Error(`routine work packet exceeds the ${MAX_WORK_PACKET_CHARS}-character surface-level planning budget`)
-          if (!description.includes("## Worker Execution Contract")) output.args.description = `${description}${WORK_REPORT_CONTRACT}`
+          if (!packet.includes("## Worker Execution Contract")) output.args[packetField] = `${packet}${WORK_REPORT_CONTRACT}`
         }
         if (agent === flow.defaultAgent && delegated === "deep") {
           const routineBlocked = runTasks.some((task) => task.agent === "routine" && ["failed", "blocked"].includes(task.status))
           if (!routineBlocked) throw new Error("deep requires a failed or blocked routine attempt in the current run")
-          if (!description.includes("## Worker Execution Contract")) output.args.description = `${description}${WORK_REPORT_CONTRACT}`
+          if (!packet.includes("## Worker Execution Contract")) output.args[packetField] = `${packet}${WORK_REPORT_CONTRACT}`
         }
         if (agent === flow.defaultAgent && delegated === reviewerPolicy?.agent) {
           if (!reviewerPolicy.enabled) throw new Error("milestone review is disabled")
-          if (description.length > reviewerPolicy.maxPacketChars) throw new Error(`review packet exceeds the ${reviewerPolicy.maxPacketChars}-character limit`)
-          const missing = missingPacketHeadings(description, REVIEW_PACKET_HEADINGS)
+          if (packet.length > reviewerPolicy.maxPacketChars) throw new Error(`review packet exceeds the ${reviewerPolicy.maxPacketChars}-character limit`)
+          const missing = missingPacketHeadings(packet, REVIEW_PACKET_HEADINGS)
           if (missing.length > 0) throw new Error(`review packet is missing headings: ${missing.join(", ")}`)
           const priorReviews = runTasks.filter((task) => task.agent === reviewerPolicy.agent)
           if (priorReviews.length >= reviewerPolicy.maxRounds) throw new Error(`review reached the ${reviewerPolicy.maxRounds}-round limit; triage remaining findings and stop`)
           if (priorReviews.length > 0) {
             const previous = priorReviews.at(-1)
             if (previous?.reviewReport?.verdict !== "changes-requested") throw new Error("re-review requires a prior changes-requested verdict")
-            const followupMissing = missingPacketHeadings(description, ["Finding Disposition", "Non-trivial Fixes"])
+            const followupMissing = missingPacketHeadings(packet, ["Finding Disposition", "Non-trivial Fixes"])
             if (followupMissing.length > 0) throw new Error(`second review requires headings: ${followupMissing.join(", ")}`)
           }
-          if (!description.includes("## Review Execution Contract"))
-            output.args.description = `${description}${REVIEW_REPORT_CONTRACT
+          if (!packet.includes("## Review Execution Contract"))
+            output.args[packetField] = `${packet}${REVIEW_REPORT_CONTRACT
               .replace("{CURRENT_ROUND}", String(priorReviews.length + 1))
               .replace("{MAX_ROUNDS}", String(reviewerPolicy.maxRounds))
               .replace("{MAX_FINDINGS}", String(reviewerPolicy.maxFindings))}`
         }
-        const packetDescription = typeof output.args.description === "string" ? output.args.description : description
-        const taskID = stableTaskID(description)
+        const packetDescription = typeof output.args[packetField] === "string" ? output.args[packetField] : packet
+        const taskID = stableTaskID(packet)
         if (runTasks.some((task) => task.status === "running" && task.agent === delegated && task.taskID === taskID))
           throw new Error(`task ${taskID} is already running; do not launch duplicate concurrent attempts`)
         if (run && (delegatedRole === "worker" || delegatedRole === "bulk-worker")) {
@@ -1196,6 +1228,12 @@ export default async function agentFlowsPlugin(input: any, options: PluginOption
       }
     },
     "tool.execute.after": async (toolInput: { callID: string }, output: { output: string; metadata?: Record<string, unknown> }) => {
+      const agCall = antigravityCalls.find((c) => c.callID === toolInput.callID)
+      if (agCall) {
+        if (agCall.status !== "failed") agCall.status = "completed"
+        agCall.completedAt = Date.now()
+        agCall.durationMs = agCall.completedAt - agCall.startedAt
+      }
       const task = tasks.get(toolInput.callID)
       if (task) {
         if (task.status !== "failed") task.status = "completed"
@@ -1294,6 +1332,12 @@ export default async function agentFlowsPlugin(input: any, options: PluginOption
         }
         const check = verification.find((item) => item.id === part.callID)
         if (check) check.status = "failed"
+        const agCall = antigravityCalls.find((c) => c.callID === part.callID)
+        if (agCall) {
+          agCall.status = "failed"
+          agCall.completedAt = part.state.time?.end ?? Date.now()
+          agCall.durationMs = (agCall.completedAt ?? Date.now()) - agCall.startedAt
+        }
       }
       const idle = event.type === "session.idle" || (event.type === "session.status" && event.properties?.status?.type === "idle")
       if (!idle || !event.properties?.sessionID) return

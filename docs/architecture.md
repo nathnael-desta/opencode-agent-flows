@@ -81,6 +81,11 @@ src/telemetry/markdown.ts
 src/telemetry/dashboard.ts
   Self-contained browser dashboard
 
+src/telemetry/types.ts
+  An AntigravityTrace (callID, session, run, type, model, status, timing) is
+  tracked for each antigravity_delegate, antigravity_background_start, and
+  antigravity_vision call through tool.execute hooks and persisted in FlowReport.
+
 src/telemetry/quota.ts
   Codex provider quota and local Command Code budget adapters
 
@@ -139,6 +144,22 @@ Overlapping writes stay serial by orchestration policy, and final verification
 runs against the integrated checkout. If strict writer isolation is required,
 run those workers in externally managed isolated workspaces rather than assuming
 the concurrency limit creates isolation.
+
+## Antigravity Tracking
+
+Antigravity delegate, background, and vision calls are tracked through
+tool.execute.before and tool.execute.after hooks. Each call is classified as
+foreground, background, or vision. Model names are recorded when present in
+tool arguments. Error events mark calls as failed. Completed calls record
+duration. All traces are persisted in the FlowReport (schema v6) and reported
+in totals (antigravityCalls, antigravityForeground, antigravityBackground,
+antigravityVision).
+
+Antigravity is read-only advisory: no browser control, no credential-based
+sign-on, and no direct shared-workspace edits — the substitution-first routing
+policy ensures it never requires a mandatory pre-step before workers.
+
+Reports at schema v5 and earlier upgrade to v6 with zeroed antigravity fields.
 
 ## Quota Sources
 

@@ -44,11 +44,13 @@ problem is never conflated with a substantive one.
 
 Session task history is rebuilt from persisted run reports, so restarting the
 plugin no longer erases prior task totals.
-The run/session report schema is **version 5** and the global report schema is
-**version 2**. Version 5 adds execution-class totals for read-only,
-shared-write, and integration tasks plus concurrent-frontier overlap counts.
-Persisted version 4 run reports and version 1 global reports are upgraded in
-memory with zero-valued parallelism totals, so older telemetry remains usable.
+The run/session report schema is **version 6** and the global report schema is
+**version 2**. Version 5 added execution-class totals for read-only,
+shared-write, and integration tasks plus concurrent-frontier overlap counts;
+version 6 adds Antigravity call traces and foreground, background, and vision
+totals. Persisted version 4 and 5 run reports and version 1 global reports are
+upgraded in memory with zero-valued missing totals, so older telemetry remains
+usable.
 
 ## Cost reporting
 

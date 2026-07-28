@@ -265,6 +265,48 @@ The two resources should not literally reach zero simultaneously: ChatGPT uses
 rolling windows while Command Code credits use a billing period. The dashboard
 instead compares current usage pressure.
 
+## Antigravity Substitution Tracking
+
+The plugin tracks every Antigravity (Gemini) call through the telemetry
+lifecycle:
+
+- **antigravity_delegate** — foreground read-only analysis calls
+- **antigravity_background_start** — non-blocking background work
+- **antigravity_vision** — image, screenshot, PDF, and diagram analysis
+
+Each call records call ID, session, run, type, model (when available),
+status (running/completed/failed), start time, completion time, and duration.
+Errors are captured through the message.part.updated tool-error event.
+
+### Report fields
+
+Tracked counts appear in report totals (antigravityCalls,
+antigravityForeground, antigravityBackground, antigravityVision) and
+the full antigravityCalls array is included in each FlowReport. Reports
+at schema v5 and earlier upgrade to v6 with zeroed antigravity fields.
+
+### Substitution-first routing
+
+Antigravity is a read-only substitution for suitable analysis work, never a
+mandatory pre-step. Its AI Pro capacity is a separate quota, not free or
+unlimited, so routing remains bounded. The routing matrix:
+
+| Work type | Route |
+|---|---|
+| Trivial requests root completes directly | Root orchestrator |
+| Large-context exploration, log/corpus summarization, visual analysis, design comparison, root-cause hypotheses, independent diff analysis | Antigravity (Gemini) substituting for a read-only call |
+| Shared writes, integration, test repair, stateful iteration, safety-sensitive work | Command Code/Codex routine worker |
+| Escalation after failed/blocked routine | Deep/extreme escalation agents |
+
+- Never require Antigravity before a routine worker
+- Never call both for the same exploration
+- Antigravity is advisory and read-only: no browser control, no
+  credential-based sign-on, no direct shared-workspace edits
+
+Independent Antigravity read-only work may overlap useful root work or
+another non-overlapping read-only frontier. Background work should not be
+spawned when completion must immediately wait on it.
+
 ## Escalation Firewall
 
 Flows mark approval-gated agents in `agentMetadata`. A direct task call to one

@@ -164,9 +164,10 @@ describe("model-independent telemetry", () => {
     await writeFile(join(directory, "latest-run.json"), JSON.stringify({ ...report, schemaVersion: 4, totals }), "utf8")
 
     const upgraded = await store.latestRun()
-    expect(upgraded?.schemaVersion).toBe(5)
+    expect(upgraded?.schemaVersion).toBe(6)
     expect(upgraded?.totals.readOnlyTasks).toBe(0)
     expect(upgraded?.totals.frontierOverlaps).toBe(0)
+    expect(upgraded?.totals.antigravityCalls).toBe(0)
   })
 
   test("respects dashboard and retention settings", async () => {
@@ -331,7 +332,7 @@ describe("model-independent telemetry", () => {
       runID: "run-schema",
       sessions: [{ id: "root", agent: "orchestrator", messages: [{ role: "user" }] }],
     })
-    expect(report.schemaVersion).toBe(5)
+    expect(report.schemaVersion).toBe(6)
     const global = buildGlobalReport([report])
     expect(global.schemaVersion).toBe(2)
   })
