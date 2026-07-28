@@ -85,6 +85,8 @@ export interface TaskTrace {
   description?: string
   model?: string
   status: "running" | "completed" | "blocked" | "failed" | "invalid-output"
+  executionClass?: ExecutionClass
+  expectedScope?: string[]
   workReport?: WorkReport
   workReportError?: string
   reviewReport?: ReviewReport
@@ -95,6 +97,8 @@ export interface TaskTrace {
   completedAt?: number
   linkConfidence: "explicit" | "correlated" | "unlinked"
 }
+
+export type ExecutionClass = "read-only" | "shared-write" | "integration"
 
 export interface ReviewFinding {
   severity: "critical" | "high" | "medium" | "low"
@@ -175,6 +179,10 @@ export interface ReportTotals {
   verificationRuns: number
   verificationFailures: number
   retries: number
+  readOnlyTasks: number
+  sharedWriteTasks: number
+  integrationTasks: number
+  frontierOverlaps: number
   costUsd: number
   evaluatorCostUsd: number
   apiEquivalentCostUsd: number
@@ -186,7 +194,7 @@ export interface ReportTotals {
 }
 
 export interface FlowReport {
-  schemaVersion: 4
+  schemaVersion: 5
   scope: "run" | "session"
   generatedAt: string
   flowID: string
@@ -230,7 +238,7 @@ export interface DeveloperModeSnapshot {
 }
 
 export interface GlobalReport {
-  schemaVersion: 1
+  schemaVersion: 2
   generatedAt: string
   runs: number
   flows: string[]

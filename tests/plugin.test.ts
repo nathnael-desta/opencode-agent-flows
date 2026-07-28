@@ -5,7 +5,9 @@ import { join } from "node:path"
 import plugin from "../plugin.js"
 
 const temporaryDirectories: string[] = []
-const workPacket = `# Objective:
+const workPacket = `# Execution Class: shared-write
+# Expected Scope: src/**/*.ts
+# Objective:
 Implement the requested behavior.
 # Scope:
 Use the relevant module only.
@@ -29,6 +31,24 @@ Review the supplied plugin diff.
 bun test and tsc --noEmit passed.
 # Risk:
 standard`
+const readOnlyPacket = `# Execution Class: read-only
+# Expected Scope: src/**/*.ts
+# Objective:
+Explore the repository structure and report findings.
+# Scope:
+The src/ directory.
+# Constraints:
+Do not edit any files.
+# Acceptance:
+A summary of the relevant module layout.
+# Verification:
+None — exploration task.
+# Escalate When:
+The requested module is not found.
+# Return:
+File listing and module relationships.`
+const noClassPacket = `# Objective:
+Implement something but skip the execution class heading.`
 
 function client() {
   return {
@@ -63,7 +83,7 @@ describe("agent flows plugin", () => {
     expect(config.agent.orchestrator.prompt).toContain("bounded unit")
     expect(config.agent.orchestrator.prompt).toContain("milestone gate")
     expect(config.agent.orchestrator.prompt).toContain("max two total")
-    expect(config.agent.orchestrator.prompt).toContain("Dispatch up to three")
+    expect(config.agent.orchestrator.prompt).toContain("Dispatch up to the configured concurrent limit")
     expect(config.agent.orchestrator.prompt).toContain("different model family")
     expect(config.agent.orchestrator.prompt).toContain("no independent cross-family reviewer")
     expect(config.agent.orchestrator.prompt).toContain("advisory evidence")
@@ -183,12 +203,13 @@ describe("agent flows plugin", () => {
       { orchestration: { maxTasksPerRun: 2, maxConcurrentWorkers: 1 }, verification: { maxWorkerAttempts: 5 } },
     )
     await hooks["chat.message"]?.({ sessionID: "root", agent: "orchestrator", messageID: "run" }, { message: { id: "run", role: "user", time: { created: Date.now() } } })
-    await hooks["tool.execute.before"]?.({ tool: "task", sessionID: "root", callID: "one" }, { args: { subagent_type: "routine", description: `# Task ID: one\n${workPacket}` } })
-    await expect(hooks["tool.execute.before"]?.({ tool: "task", sessionID: "root", callID: "concurrent" }, { args: { subagent_type: "routine", description: `# Task ID: two\n${workPacket}` } })).rejects.toThrow("concurrency limit")
+    const readOnlyPacket = `# Execution Class: read-only\n# Expected Scope: src/**/*.ts\n# Objective:\nExplore the repo.\n# Scope:\nsrc/\n# Constraints:\nNo edits.\n# Acceptance:\nSummary.\n# Verification:\nbun test\n# Escalate When:\nConflict.\n# Return:\nFile listing.`
+    await hooks["tool.execute.before"]?.({ tool: "task", sessionID: "root", callID: "one" }, { args: { subagent_type: "routine", description: readOnlyPacket } })
+    await expect(hooks["tool.execute.before"]?.({ tool: "task", sessionID: "root", callID: "concurrent" }, { args: { subagent_type: "routine", description: readOnlyPacket } })).rejects.toThrow("concurrency limit")
     await hooks["tool.execute.after"]?.({ callID: "one" }, { output: '<flow-work-report>{"status":"completed","summary":"done","filesChanged":["fake.ts"],"verification":[],"scopeChanges":[]}</flow-work-report>' })
-    await hooks["tool.execute.before"]?.({ tool: "task", sessionID: "root", callID: "two" }, { args: { subagent_type: "routine", description: `# Task ID: two\n${workPacket}` } })
+    await hooks["tool.execute.before"]?.({ tool: "task", sessionID: "root", callID: "two" }, { args: { subagent_type: "routine", description: readOnlyPacket } })
     await hooks["tool.execute.after"]?.({ callID: "two" }, { output: '<flow-work-report>{"status":"completed","summary":"done","filesChanged":["fake.ts"],"verification":[],"scopeChanges":[]}</flow-work-report>' })
-    await expect(hooks["tool.execute.before"]?.({ tool: "task", sessionID: "root", callID: "three" }, { args: { subagent_type: "routine", description: `# Task ID: three\n${workPacket}` } })).rejects.toThrow("2-task delegation budget")
+    await expect(hooks["tool.execute.before"]?.({ tool: "task", sessionID: "root", callID: "three" }, { args: { subagent_type: "routine", description: readOnlyPacket } })).rejects.toThrow("2-task delegation budget")
   })
 
   test("enforces compact milestone review packets and a two-round ceiling", async () => {
@@ -247,7 +268,7 @@ describe("agent flows plugin", () => {
     await hooks["tool.execute.after"]?.({ callID: "valid" }, output)
     expect(output.output).toContain("Flow guardrail")
 
-    const conciseArgs = { subagent_type: "routine", description: "Implement the approved R2 milestone and stop if its constraints cannot be met." }
+    const conciseArgs = { subagent_type: "routine", description: "# Execution Class: shared-write\n# Expected Scope: src/**/*.ts\nImplement the approved R2 milestone and stop if its constraints cannot be met." }
     await hooks["tool.execute.before"]?.({ tool: "task", sessionID: "root", callID: "concise" }, { args: conciseArgs })
     expect(conciseArgs.description).toContain("Worker Execution Contract")
   })
@@ -495,5 +516,154 @@ describe("agent flows plugin", () => {
     expect(prompt).toContain("Reserve direct edits for truly trivial corrections")
     expect(prompt).toContain("first re-delegate the same Task ID")
     expect(prompt).toContain("Verify work proportionately")
+  })
+
+  test("rejects worker tasks that omit Execution Class heading", async () => {
+    const hooks: any = await plugin({ client: client() })
+    await hooks["chat.message"]?.({ sessionID: "root", agent: "orchestrator", messageID: "run" }, { message: { id: "run", role: "user", time: { created: Date.now() } } })
+    await expect(
+      hooks["tool.execute.before"]?.(
+        { tool: "task", sessionID: "root", callID: "no-class" },
+        { args: { subagent_type: "routine", description: noClassPacket } },
+      ),
+    ).rejects.toThrow("Execution Class")
+  })
+
+  test("admits read-only tasks up to the concurrency cap", async () => {
+    const hooks: any = await plugin(
+      { client: client() },
+      { orchestration: { maxConcurrentWorkers: 2 }, verification: { maxWorkerAttempts: 5 } },
+    )
+    await hooks["chat.message"]?.({ sessionID: "root", agent: "orchestrator", messageID: "run" }, { message: { id: "run", role: "user", time: { created: Date.now() } } })
+    const roA = `# Execution Class: read-only\n# Task ID: concurrent-ro-a\n${readOnlyPacket}`
+    const roB = `# Execution Class: read-only\n# Task ID: concurrent-ro-b\n${readOnlyPacket}`
+    await hooks["tool.execute.before"]?.({ tool: "task", sessionID: "root", callID: "ro1" }, { args: { subagent_type: "routine", description: roA } })
+    await hooks["tool.execute.before"]?.({ tool: "task", sessionID: "root", callID: "ro2" }, { args: { subagent_type: "routine", description: roB } })
+    await hooks["tool.execute.after"]?.({ callID: "ro1" }, { output: '<flow-work-report>{"status":"completed","summary":"done","filesChanged":["a.ts"],"verification":[],"scopeChanges":[]}</flow-work-report>' })
+    await hooks["tool.execute.after"]?.({ callID: "ro2" }, { output: '<flow-work-report>{"status":"completed","summary":"done","filesChanged":["b.ts"],"verification":[],"scopeChanges":[]}</flow-work-report>' })
+  })
+
+  test("serializes shared-write tasks even when concurrent slots are free", async () => {
+    const hooks: any = await plugin(
+      { client: client() },
+      { orchestration: { maxConcurrentWorkers: 3 }, verification: { maxWorkerAttempts: 5 } },
+    )
+    await hooks["chat.message"]?.({ sessionID: "root", agent: "orchestrator", messageID: "run" }, { message: { id: "run", role: "user", time: { created: Date.now() } } })
+    await hooks["tool.execute.before"]?.({ tool: "task", sessionID: "root", callID: "sw1" }, { args: { subagent_type: "routine", description: workPacket } })
+    // Second shared-write is rejected while first is running.
+    await expect(
+      hooks["tool.execute.before"]?.({ tool: "task", sessionID: "root", callID: "sw2" }, { args: { subagent_type: "routine", description: workPacket } }),
+    ).rejects.toThrow("shared-write and integration tasks must run one at a time")
+    await hooks["tool.execute.after"]?.({ callID: "sw1" }, { output: '<flow-work-report>{"status":"completed","summary":"done","filesChanged":["fake.ts"],"verification":[],"scopeChanges":[]}</flow-work-report>' })
+    // Now a second shared-write is allowed since nothing is running.
+    await hooks["tool.execute.before"]?.({ tool: "task", sessionID: "root", callID: "sw3" }, { args: { subagent_type: "routine", description: workPacket } })
+  })
+
+  test("blocks mutating tools from read-only workers", async () => {
+    const hooks: any = await plugin({
+      client: {
+        session: {
+          get: async ({ path }: { path: { id: string } }) => ({ data: path.id === "worker-session" ? { id: "worker-session", parentID: "root" } : { id: "root" } }),
+          children: async () => ({ data: [] }),
+          messages: async () => ({ data: [] }),
+        },
+      },
+    })
+    await hooks["chat.message"]?.({ sessionID: "root", agent: "orchestrator", messageID: "run" }, { message: { id: "run", role: "user", time: { created: Date.now() } } })
+    // Dispatch a read-only worker task.
+    await hooks["tool.execute.before"]?.({ tool: "task", sessionID: "root", callID: "ro-dispatch" }, { args: { subagent_type: "routine", description: readOnlyPacket } })
+    // Attach the worker session to agent "routine" so the enforcement code can match.
+    await hooks["chat.message"]?.({ sessionID: "worker-session", agent: "routine" }, { message: { id: "worker-msg", role: "user", time: { created: Date.now() } } })
+    // The task is still running (status: "running"), so its executionClass matches.
+    await expect(
+      hooks["tool.execute.before"]?.({ tool: "edit", sessionID: "worker-session", callID: "edit" }, { args: { filePath: "src/app.ts" } }),
+    ).rejects.toThrow("read-only")
+  })
+
+  test("persists executionClass and expectedScope in task traces", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "agent-flow-class-"))
+    temporaryDirectories.push(directory)
+    const createdAt = Date.now() - 1_000
+    const hooks: any = await plugin({
+      client: {
+        session: {
+          get: async () => ({ data: { id: "root" } }),
+          children: async () => ({ data: [] }),
+          messages: async () => ({ data: [
+            { info: { id: "first", role: "user", agent: "orchestrator", time: { created: createdAt } } },
+          ] }),
+        },
+        tui: { showToast: async () => {} },
+      },
+    }, { telemetry: { reportDir: directory, runSummaryToast: false } })
+    await hooks["chat.message"]?.({ sessionID: "root", agent: "orchestrator", messageID: "run" }, { message: { id: "run", role: "user", time: { created: createdAt } } })
+    const desc = `# Execution Class: read-only\n# Expected Scope: src/*.ts, src/parser.ts\n${readOnlyPacket}`
+    await hooks["tool.execute.before"]?.({ tool: "task", sessionID: "root", callID: "scope-test" }, { args: { subagent_type: "routine", description: desc } })
+    await hooks["tool.execute.after"]?.({ callID: "scope-test" }, { output: '<flow-work-report>{"status":"completed","summary":"done","filesChanged":["a.ts"],"verification":[],"scopeChanges":[]}</flow-work-report>' })
+    await hooks.event?.({ event: { type: "session.idle", properties: { sessionID: "root" } } })
+    const report = JSON.parse(await readFile(join(directory, "latest-run.json"), "utf8"))
+    const task = report.tasks.find((t: any) => t.callID === "scope-test")
+    expect(task).toBeDefined()
+    expect(task.executionClass).toBe("read-only")
+    expect(task.expectedScope).toEqual(["src/*.ts", "src/parser.ts"])
+    expect(report.totals.readOnlyTasks).toBe(1)
+  })
+
+  test("warns when overlapping completed manifests share files in the same time frontier", async () => {
+    const hooks: any = await plugin({
+      client: {
+        session: {
+          get: async () => ({ data: { id: "root" } }),
+          children: async () => ({ data: [] }),
+          messages: async () => ({ data: [] }),
+        },
+      },
+    }, { orchestration: { maxConcurrentWorkers: 3 }, verification: { maxWorkerAttempts: 5 } })
+    await hooks["chat.message"]?.({ sessionID: "root", agent: "orchestrator", messageID: "run" }, { message: { id: "run", role: "user", time: { created: Date.now() } } })
+    const roA = `# Execution Class: read-only\n# Expected Scope: src/**/*.ts\n# Task ID: overlap-frontier-a\n# Objective:\nExplore module A.\n# Scope:\nsrc/\n# Constraints:\nNo edits.\n# Acceptance:\nSummary.\n# Verification:\nbun test\n# Escalate When:\nConflict.\n# Return:\nFile listing.`
+    const roB = `# Execution Class: read-only\n# Expected Scope: src/**/*.ts\n# Task ID: overlap-frontier-b\n# Objective:\nExplore module B.\n# Scope:\nsrc/\n# Constraints:\nNo edits.\n# Acceptance:\nSummary.\n# Verification:\nbun test\n# Escalate When:\nConflict.\n# Return:\nFile listing.`
+    await hooks["tool.execute.before"]?.({ tool: "task", sessionID: "root", callID: "overlap-a" }, { args: { subagent_type: "routine", description: roA } })
+    await hooks["tool.execute.before"]?.({ tool: "task", sessionID: "root", callID: "overlap-b" }, { args: { subagent_type: "routine", description: roB } })
+    await hooks["tool.execute.after"]?.({ callID: "overlap-a" }, { output: '<flow-work-report>{"status":"completed","summary":"done","filesChanged":["shared.ts"],"verification":[],"scopeChanges":[]}</flow-work-report>' })
+    await new Promise((r) => setTimeout(r, 2))
+    const output = { output: '<flow-work-report>{"status":"completed","summary":"done","filesChanged":["shared.ts"],"verification":[],"scopeChanges":[]}</flow-work-report>' }
+    await hooks["tool.execute.after"]?.({ callID: "overlap-b" }, output)
+    expect(output.output).toContain("overlapping completed worker filesChanged")
+  })
+
+  test("blocks read-only task when a shared-write task is active", async () => {
+    const hooks: any = await plugin(
+      { client: client() },
+      { orchestration: { maxConcurrentWorkers: 3 }, verification: { maxWorkerAttempts: 5 } },
+    )
+    await hooks["chat.message"]?.({ sessionID: "root", agent: "orchestrator", messageID: "run" }, { message: { id: "run", role: "user", time: { created: Date.now() } } })
+    // Start a shared-write first.
+    await hooks["tool.execute.before"]?.({ tool: "task", sessionID: "root", callID: "sw1" }, { args: { subagent_type: "routine", description: workPacket } })
+    // A read-only task must be rejected while the writer is active.
+    await expect(
+      hooks["tool.execute.before"]?.({ tool: "task", sessionID: "root", callID: "ro1" }, { args: { subagent_type: "routine", description: readOnlyPacket } }),
+    ).rejects.toThrow("shared-write or integration task is active")
+  })
+
+  test("rejects worker tasks that omit Expected Scope", async () => {
+    const hooks: any = await plugin({ client: client() })
+    await hooks["chat.message"]?.({ sessionID: "root", agent: "orchestrator", messageID: "run" }, { message: { id: "run", role: "user", time: { created: Date.now() } } })
+    await expect(
+      hooks["tool.execute.before"]?.(
+        { tool: "task", sessionID: "root", callID: "no-scope" },
+        { args: { subagent_type: "routine", description: `# Execution Class: shared-write\n# Objective:\nEdit files.\n# Scope:\nCore.\n# Constraints:\nSafe.\n# Acceptance:\nTest passes.\n# Verification:\nbun test\n# Escalate When:\nConflict.\n# Return:\nDiff.` } },
+      ),
+    ).rejects.toThrow("non-empty Expected Scope")
+  })
+
+  test("rejects malformed Expected Scope (semicolons but empty items)", async () => {
+    const hooks: any = await plugin({ client: client() })
+    await hooks["chat.message"]?.({ sessionID: "root", agent: "orchestrator", messageID: "run" }, { message: { id: "run", role: "user", time: { created: Date.now() } } })
+    await expect(
+      hooks["tool.execute.before"]?.(
+        { tool: "task", sessionID: "root", callID: "empty-scope" },
+        { args: { subagent_type: "routine", description: `# Execution Class: read-only\n# Expected Scope: ;\n# Objective:\nExplore.\n# Scope:\nsrc/\n# Constraints:\nSafe.\n# Acceptance:\nList.\n# Verification:\nbun test\n# Escalate When:\nConflict.\n# Return:\nFiles.` } },
+      ),
+    ).rejects.toThrow("non-empty Expected Scope")
   })
 })

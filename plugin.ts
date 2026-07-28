@@ -20,7 +20,7 @@ import { CONFIG_COMMAND_TEMPLATE, SETUP_COMMAND_TEMPLATE } from "./src/orchestra
 import { detectAntigravity, formatAntigravityStatus, type ProbeRunner } from "./src/orchestration/antigravity.js"
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
-import type { AgentDefinition, AgentMetadata, FlowDefinition, OpenCodeConfig, PluginOptions } from "./src/types.js"
+import type { AgentDefinition, AgentMetadata, ExecutionClass, FlowDefinition, OpenCodeConfig, PluginOptions } from "./src/types.js"
 import { expandPath, defaultTelemetryDirectory } from "./src/telemetry/path.js"
 import { normalizePricing } from "./src/telemetry/pricing.js"
 import { commandCodeBudget, readCodexQuota } from "./src/telemetry/quota.js"
@@ -53,7 +53,7 @@ interface RawMessage {
 type ModelOverrides = Record<string, { model: string; variant?: string }>
 
 const DEFAULT_PROTECTED_PATHS = [".env", "auth", "billing", "infrastructure", "migrations"]
-const WORK_PACKET_HEADINGS = ["Objective", "Scope", "Constraints", "Acceptance", "Verification", "Escalate When", "Return"]
+const WORK_PACKET_HEADINGS = ["Objective", "Execution Class", "Expected Scope", "Scope", "Constraints", "Acceptance", "Verification", "Escalate When", "Return"]
 const DEEP_PACKET_HEADINGS = [...WORK_PACKET_HEADINGS, "Escalation Evidence"]
 const MAX_WORK_PACKET_CHARS = 3_000
 const REVIEW_PACKET_HEADINGS = ["Review Milestone", "Acceptance", "Change Set", "Verification", "Risk"]
@@ -298,6 +298,26 @@ function parseReviewReport(output: string, maximumFindings: number): { report?: 
 function packetField(description: string, heading: string): string | undefined {
   const match = description.match(new RegExp(`(?:^|\\n)\\s{0,3}(?:#+\\s*)?(?:\\*\\*)?${heading}(?:\\*\\*)?\\s*:?\\s*([^\\n]+)`, "i"))
   return match?.[1]?.trim()
+}
+
+function parseExecutionClass(description: string): ExecutionClass | undefined {
+  const value = packetField(description, "Execution Class")
+  if (!value) return undefined
+  const lower = value.toLowerCase()
+  if (lower.includes("read-only") || lower.includes("read only") || lower === "readonly") return "read-only"
+  if (lower.includes("shared-write") || lower.includes("shared write")) return "shared-write"
+  if (lower.includes("integration")) return "integration"
+  return undefined
+}
+
+function parseExpectedScope(description: string): string[] | undefined {
+  const field = packetField(description, "Expected Scope")
+  if (!field) return undefined
+  return field
+    .split(/[,;]/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .slice(0, 20)
 }
 
 function stableTaskID(description: string): string {
@@ -1039,12 +1059,34 @@ export default async function agentFlowsPlugin(input: any, options: PluginOption
         const description = typeof output.args.description === "string" ? output.args.description : ""
         const delegatedRole = metadata[delegated]?.role
         const runTasks = [...tasks.values()].filter((task) => task.runID === run?.id)
+        let execClass: ExecutionClass | undefined
+        let expectedScope: string[] | undefined
         if (run && runTasks.length >= orchestrationPolicy.maxTasksPerRun)
           throw new Error(`run reached the ${orchestrationPolicy.maxTasksPerRun}-task delegation budget; return a partial result or ask the user`)
         if (agent === flow.defaultAgent && (delegatedRole === "worker" || delegatedRole === "bulk-worker")) {
-          const runningWorkers = runTasks.filter((task) => task.status === "running" && ["worker", "bulk-worker"].includes(metadata[task.agent ?? ""]?.role ?? "")).length
-          if (runningWorkers >= orchestrationPolicy.maxConcurrentWorkers)
-            throw new Error(`run reached the ${orchestrationPolicy.maxConcurrentWorkers}-worker concurrency limit; integrate the current frontier first`)
+          execClass = parseExecutionClass(description)
+          if (execClass === undefined)
+            throw new Error(`worker task must declare an Execution Class: read-only, shared-write, or integration; add an "Execution Class" heading to the packet`)
+          expectedScope = parseExpectedScope(description)
+          if (!expectedScope || expectedScope.length === 0)
+            throw new Error("worker task must supply a non-empty Expected Scope: a comma/semicolon-separated path or directory pattern manifest (e.g. src/**/*.ts, src/parser.ts)")
+          const runningWorkerTasks = runTasks.filter((task) =>
+            task.status === "running" && ["worker", "bulk-worker"].includes(metadata[task.agent ?? ""]?.role ?? ""),
+          )
+          // Homogeneous frontier: only read-only tasks may share the concurrency
+          // pool. A shared-write or integration task needs the frontier empty,
+          // and a read-only task must wait while any writer is active so it
+          // cannot observe a partial write in progress.
+          if (execClass === "read-only") {
+            const activeWriters = runningWorkerTasks.filter((t) => t.executionClass !== "read-only")
+            if (activeWriters.length > 0)
+              throw new Error("a shared-write or integration task is active; wait for it to finish before starting a read-only task")
+            if (runningWorkerTasks.length >= orchestrationPolicy.maxConcurrentWorkers)
+              throw new Error(`run reached the ${orchestrationPolicy.maxConcurrentWorkers}-worker concurrency limit; integrate the current frontier first`)
+          } else {
+            if (runningWorkerTasks.length > 0)
+              throw new Error("shared-write and integration tasks must run one at a time; wait for the current worker to finish")
+          }
           if (delegatedRole === "worker" && description.length > MAX_WORK_PACKET_CHARS)
             throw new Error(`routine work packet exceeds the ${MAX_WORK_PACKET_CHARS}-character surface-level planning budget`)
           if (!description.includes("## Worker Execution Contract")) output.args.description = `${description}${WORK_REPORT_CONTRACT}`
@@ -1111,9 +1153,24 @@ export default async function agentFlowsPlugin(input: any, options: PluginOption
           description: packetDescription,
           model: runtimeFlow.agents[delegated]?.model,
           status: "running",
+          executionClass: execClass,
+          expectedScope,
           startedAt: Date.now(),
           linkConfidence: "explicit",
         })
+      }
+      // Defense-in-depth: when homogeneous frontiers are enforced, a read-only
+      // task can never overlap with a writer, so agent-name matching inherently
+      // blocks every legitimate writer. This guard is redundant with frontier
+      // homogeneity but is kept as a secondary layer; it does not attempt
+      // callID/session correlation because those links are unreliable across
+      // tool calls from the same agent.
+      if ((role === "worker" || role === "bulk-worker") && ["edit", "write", "apply_patch", "bash", "task"].includes(toolInput.tool)) {
+        const workerTask = [...tasks.values()].find(
+          (t) => t.agent === agent && t.status === "running" && t.executionClass === "read-only",
+        )
+        if (workerTask)
+          throw new Error(`read-only worker ${agent} cannot use ${toolInput.tool}; the task was dispatched as read-only (Execution Class: read-only)`)
       }
       if (
         (options.guardrails?.enabled ?? true) &&
@@ -1191,6 +1248,34 @@ export default async function agentFlowsPlugin(input: any, options: PluginOption
         }
         const evidence = parseEvaluation(output.output, task.runID, task.sessionID)
         if (evidence) quality.push(evidence)
+
+        // The overlap check only fires on the second finisher's
+        // tool.execute.after because the first finisher cannot yet know what
+        // files its concurrent peer will report in filesChanged. After both
+        // finish, each file intersection is written as a warning only on the
+        // later output. This is a one-sided mechanism: overlapping groups of
+        // three or more report the pairwise intersections that include the
+        // latest finisher.
+        if (task.workReport?.filesChanged && task.workReport.filesChanged.length > 0) {
+          const runCompletedWithFiles = [...tasks.values()].filter(
+            (t) =>
+              t.runID === task.runID &&
+              t.id !== task.id &&
+              t.workReport?.filesChanged &&
+              t.workReport.filesChanged.length > 0 &&
+              t.completedAt !== undefined &&
+              t.startedAt <= task.completedAt! &&
+              task.startedAt <= t.completedAt,
+          )
+          const overlapping: string[] = []
+          for (const other of runCompletedWithFiles) {
+            const shared = other.workReport!.filesChanged.filter((file) => task.workReport!.filesChanged.includes(file))
+            if (shared.length > 0) overlapping.push(`[${other.agent ?? "unknown"}: ${shared.join(", ")}]`)
+          }
+          if (overlapping.length > 0) {
+            output.output += `\n\n[Flow: overlapping completed worker filesChanged in the same concurrent frontier. Other workers touched the same files: ${overlapping.join(" ")}. The orchestrator should verify that these writes are safe and not a silent conflict.]`
+          }
+        }
       }
       const check = verification.find((item) => item.id === toolInput.callID)
       if (check) {

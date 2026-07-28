@@ -6,6 +6,8 @@ export type AgentRole =
   | "escalation"
   | "evaluator"
 
+export type ExecutionClass = "read-only" | "shared-write" | "integration"
+
 export interface AgentDefinition {
   description: string
   mode: "primary" | "subagent" | "all"

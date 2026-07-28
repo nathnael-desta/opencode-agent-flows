@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { mkdtemp, readFile, rm } from "node:fs/promises"
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
 import plugin from "../plugin.js"
@@ -9,7 +9,9 @@ import { TelemetryStore } from "../src/telemetry/store.js"
 import type { TokenUsage } from "../src/telemetry/types.js"
 
 const temporaryDirectories: string[] = []
-const workPacket = `# Objective:
+const workPacket = `# Execution Class: shared-write
+# Expected Scope: src/**/*.ts
+# Objective:
 Implement the requested behavior.
 # Scope:
 Use the relevant module only.
@@ -142,6 +144,29 @@ describe("model-independent telemetry", () => {
     expect(dashboard).toContain("data-run")
     expect(report.durationMs).toBeGreaterThanOrEqual(1_000)
     expect(buildGlobalReport([report]).averageDurationMs).toBe(report.durationMs)
+  })
+
+  test("upgrades v4 flow reports with zeroed parallelism totals", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "agent-flow-v4-"))
+    temporaryDirectories.push(directory)
+    const store = new TelemetryStore(directory)
+    const report = buildFlowReport({
+      flow: openaiCommandCodeRouter,
+      rootSessionID: "root",
+      runID: "old-run",
+      sessions: [],
+    }) as unknown as Record<string, unknown>
+    const totals = { ...(report.totals as Record<string, unknown>) }
+    delete totals.readOnlyTasks
+    delete totals.sharedWriteTasks
+    delete totals.integrationTasks
+    delete totals.frontierOverlaps
+    await writeFile(join(directory, "latest-run.json"), JSON.stringify({ ...report, schemaVersion: 4, totals }), "utf8")
+
+    const upgraded = await store.latestRun()
+    expect(upgraded?.schemaVersion).toBe(5)
+    expect(upgraded?.totals.readOnlyTasks).toBe(0)
+    expect(upgraded?.totals.frontierOverlaps).toBe(0)
   })
 
   test("respects dashboard and retention settings", async () => {
@@ -297,5 +322,64 @@ describe("model-independent telemetry", () => {
     const report = JSON.parse(await readFile(join(directory, "latest-session.json"), "utf8"))
     expect(report.totals.tasksStarted).toBe(2)
     expect(report.totals.tasksCompleted).toBe(2)
+  })
+
+  test("writes reports at current schema versions", async () => {
+    const report = buildFlowReport({
+      flow: openaiCommandCodeRouter,
+      rootSessionID: "root",
+      runID: "run-schema",
+      sessions: [{ id: "root", agent: "orchestrator", messages: [{ role: "user" }] }],
+    })
+    expect(report.schemaVersion).toBe(5)
+    const global = buildGlobalReport([report])
+    expect(global.schemaVersion).toBe(2)
+  })
+
+  test("loads old v1 global report shape without crashing", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "agent-flow-old-global-"))
+    temporaryDirectories.push(directory)
+    const store = new TelemetryStore(directory)
+    const v1Shape = {
+      schemaVersion: 1,
+      generatedAt: new Date().toISOString(),
+      runs: 3,
+      flows: ["openai-commandcode-router"],
+      totals: {
+        assistantMessages: 10,
+        calls: 10,
+        errors: 0,
+        subagentsSpawned: 2,
+        tasksStarted: 2,
+        tasksCompleted: 2,
+        taskFailures: 0,
+        taskInvalidOutputs: 0,
+        verificationRuns: 1,
+        verificationFailures: 0,
+        retries: 0,
+        readOnlyTasks: 1,
+        sharedWriteTasks: 1,
+        integrationTasks: 0,
+        frontierOverlaps: 0,
+        costUsd: 0.01,
+        evaluatorCostUsd: 0,
+        apiEquivalentCostUsd: 0,
+        evaluatorApiEquivalentCostUsd: 0,
+        apiEquivalentPricedCalls: 0,
+        apiEquivalentUnpricedCalls: 0,
+        workloadUnits: 1000,
+        tokens: { input: 500, output: 200, reasoning: 0, cacheRead: 0, cacheWrite: 0 },
+      },
+      averageEstimatedUsageReductionPct: 50,
+      averageCapacityMultiplier: 2,
+      averageDurationMs: 5000,
+      feedback: { good: 2, mixed: 1, bad: 0, unknown: 0 },
+      latestQuotas: [],
+    }
+    await writeFile(join(directory, "global.json"), JSON.stringify(v1Shape, null, 2))
+    const global = await store.global()
+    expect(global.schemaVersion).toBe(2)
+    expect(global.runs).toBe(3)
+    expect(global.totals.frontierOverlaps).toBe(0)
   })
 })

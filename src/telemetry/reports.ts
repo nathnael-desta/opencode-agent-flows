@@ -30,6 +30,10 @@ const emptyTotals = (): ReportTotals => ({
   verificationRuns: 0,
   verificationFailures: 0,
   retries: 0,
+  readOnlyTasks: 0,
+  sharedWriteTasks: 0,
+  integrationTasks: 0,
+  frontierOverlaps: 0,
   costUsd: 0,
   evaluatorCostUsd: 0,
   apiEquivalentCostUsd: 0,
@@ -210,6 +214,27 @@ export function buildFlowReport(input: BuildReportInput): FlowReport {
   totals.verificationFailures = verification.filter((item) => item.status === "failed").length
   totals.retries = Math.max(0, tasks.length - new Set(tasks.map((task) => (task.agent ?? "unknown") + ":" + (task.taskID ?? task.description ?? task.id))).size)
 
+  const completedWorkerTasks = tasks.filter(
+    (task) => task.executionClass !== undefined && task.status !== "running",
+  )
+  totals.readOnlyTasks = completedWorkerTasks.filter((task) => task.executionClass === "read-only").length
+  totals.sharedWriteTasks = completedWorkerTasks.filter((task) => task.executionClass === "shared-write").length
+  totals.integrationTasks = completedWorkerTasks.filter((task) => task.executionClass === "integration").length
+
+  const completedWithFiles = tasks.filter(
+    (task) => task.workReport?.filesChanged && task.workReport.filesChanged.length > 0 && task.startedAt > 0 && task.completedAt !== undefined && task.completedAt > task.startedAt,
+  )
+  for (let i = 0; i < completedWithFiles.length; i++) {
+    for (let j = i + 1; j < completedWithFiles.length; j++) {
+      const a = completedWithFiles[i]
+      const b = completedWithFiles[j]
+      const overlap = a.startedAt < b.completedAt! && b.startedAt < a.completedAt!
+      if (!overlap) continue
+      const shared = a.workReport!.filesChanged.filter((file) => b.workReport!.filesChanged.includes(file))
+      if (shared.length > 0) totals.frontierOverlaps += 1
+    }
+  }
+
   const productionUnits = Math.max(0, totals.workloadUnits - [...agents.values()]
     .filter((agent) => agent.role === "evaluator")
     .reduce((sum, agent) => sum + agent.workloadUnits, 0))
@@ -219,7 +244,7 @@ export function buildFlowReport(input: BuildReportInput): FlowReport {
   const quotaSnapshots = input.quotas ?? []
 
   return {
-    schemaVersion: 4,
+    schemaVersion: 5,
     scope: input.runID ? "run" : "session",
     generatedAt: new Date().toISOString(),
     flowID: input.flow.id,
@@ -280,7 +305,8 @@ export function buildFlowReport(input: BuildReportInput): FlowReport {
 function addTotals(target: ReportTotals, source: ReportTotals): void {
   for (const key of [
     "assistantMessages", "calls", "errors", "subagentsSpawned", "tasksStarted", "tasksCompleted", "taskFailures", "taskInvalidOutputs",
-    "verificationRuns", "verificationFailures", "retries", "costUsd", "evaluatorCostUsd",
+    "verificationRuns", "verificationFailures", "retries", "readOnlyTasks", "sharedWriteTasks", "integrationTasks", "frontierOverlaps",
+    "costUsd", "evaluatorCostUsd",
     "apiEquivalentCostUsd", "evaluatorApiEquivalentCostUsd", "apiEquivalentPricedCalls", "apiEquivalentUnpricedCalls", "workloadUnits",
   ] as const) target[key] += source[key] ?? (key === "assistantMessages" ? source.calls : 0)
   addTokens(target.tokens, source.tokens)
@@ -299,7 +325,7 @@ export function buildGlobalReport(reports: FlowReport[]): GlobalReport {
   const timedRuns = reports.filter((report) => report.durationMs !== undefined)
   const latestQuotas = [...reports].reverse().find((report) => report.quotas.length > 0)?.quotas ?? []
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     generatedAt: new Date().toISOString(),
     runs: reports.length,
     flows: [...new Set(reports.map((report) => report.flowID))].sort(),
