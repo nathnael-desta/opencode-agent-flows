@@ -8,59 +8,45 @@ function normalise(text: string): string {
 }
 
 describe("browser artifact routing", () => {
-  test("built-in flow orchestrator prompt contains Playwright/browser routing policy", () => {
+  test("built-in and custom prompts contain the Browser Control and visual-offload invariants", () => {
     const flow = flows["openai-commandcode-router"]
-    const prompt = normalise(flow.agents.orchestrator.prompt ?? "")
+    const prompts = [
+      normalise(flow.agents.orchestrator.prompt ?? ""),
+      normalise(ROLE_TEMPLATES.orchestrator.prompt ?? ""),
+    ]
 
-    expect(prompt).toContain(normalise("antigravity_delegate, antigravity_vision, or antigravity_background"))
-    expect(prompt).toContain(normalise("antigravity_vision; large-context whole-repo or whole-log reads"))
-    expect(prompt).toContain(normalise("Gemini Flash is weak at long-horizon autonomy"))
-
-    expect(prompt).toContain(normalise("When you drive Playwright or equivalent browser tools"))
-    expect(prompt).toContain(normalise("route screenshots and rendered PDFs to antigravity_vision"))
-    expect(prompt).toContain(normalise("Route textual artifacts — accessibility snapshots, console excerpts, network summaries, and text trace excerpts — to antigravity_delegate"))
-    expect(prompt).toContain(normalise("spot layout breaks, missing text, overflow, dark-mode mismatches"))
-    expect(prompt).toContain(normalise("Do not delegate individual clicks or interactions to Gemini"))
-    expect(prompt).toContain(normalise("do not run autonomous destructive flows"))
-    expect(prompt).toContain(normalise("do not claim Gemini controls Playwright"))
-    expect(prompt).toContain(normalise("can reduce expensive primary-model context and uses bundled quota"))
-    expect(prompt).toContain(normalise("Binary Playwright traces cannot be passed directly to either tool"))
+    for (const prompt of prompts) {
+      expect(prompt).toContain(normalise("use them for all browser interaction"))
+      expect(prompt).toContain(normalise("Load the Browser Control skill as operating policy and use MCP as the execution transport"))
+      expect(prompt).toContain(normalise("one named or adopted session"))
+      expect(prompt).toContain(normalise("one bounded snapshot of the relevant region"))
+      expect(prompt).toContain(normalise("Use snapshot diff only for compatible same-page changes, never across navigation or reload"))
+      expect(prompt).toContain(normalise("visual checkpoints only for the initial bug"))
+      expect(prompt).toContain(normalise("maximum of three evidence-backed findings"))
+      expect(prompt).toContain(normalise("never let it click, type, authenticate, approve, or control Browser Control"))
+      expect(prompt).toContain(normalise("verify actionable findings through DOM, ARIA, computed styles, or bounding boxes"))
+      expect(prompt).toContain(normalise("Browser Control handoff for CAPTCHA, 2FA, passkeys, payment confirmation"))
+      expect(prompt).toContain(normalise("ask the user to attach or reconnect instead of silently switching to an isolated browser"))
+      expect(prompt).toContain(normalise("If Antigravity is unavailable, continue semantic and DOM verification"))
+    }
   })
 
   test("built-in flow routing rules include browser/artifact routing entries", () => {
     const flow = flows["openai-commandcode-router"]
     const rules = flow.routingRules.map((r) => normalise(r))
 
-    expect(rules).toContain(normalise("Route images, screenshots, PDFs, diagrams, and large-context reads to antigravity_vision or antigravity_delegate via Gemini 3.6 Flash when Antigravity is available."))
-    expect(rules.some((r) => r.includes(normalise("split visual outputs (screenshots, rendered PDFs) to antigravity_vision")))).toBe(true)
-    expect(rules.some((r) => r.includes(normalise("textual artifacts (accessibility snapshots, console excerpts, network summaries, text trace excerpts) to antigravity_delegate")))).toBe(true)
-    expect(rules.some((r) => r.includes(normalise("Extract bounded screenshots or text from binary Playwright traces before routing")))).toBe(true)
+    expect(rules.some((r) => r.includes(normalise("Use Browser Control MCP as the default browser transport")))).toBe(true)
+    expect(rules.some((r) => r.includes(normalise("one bounded snapshot, focused structured assertions, same-page diffs only")))).toBe(true)
+    expect(rules.some((r) => r.includes(normalise("keep browser control and finding disposition on the primary orchestrator")))).toBe(true)
   })
 
   test("built-in flow limitations include browser routing disclaimer", () => {
     const flow = flows["openai-commandcode-router"]
     const limitation = normalise(flow.limitations.find((l) => l.includes("Browser")) ?? "")
 
-    expect(limitation).toContain(normalise("Browser/frontend artifact routing through Antigravity is a prompt policy"))
-    expect(limitation).toContain(normalise("does not provide a Playwright MCP integration or intercept browser tool calls"))
-  })
-
-  test("custom flow orchestrator prompt contains identical Playwright/browser routing policy", () => {
-    const prompt = normalise(ROLE_TEMPLATES.orchestrator.prompt ?? "")
-
-    expect(prompt).toContain(normalise("antigravity_delegate, antigravity_vision, or antigravity_background"))
-    expect(prompt).toContain(normalise("antigravity_vision; large-context whole-repo or whole-log reads"))
-    expect(prompt).toContain(normalise("Gemini Flash is weak at long-horizon autonomy"))
-
-    expect(prompt).toContain(normalise("When you drive Playwright or equivalent browser tools"))
-    expect(prompt).toContain(normalise("route screenshots and rendered PDFs to antigravity_vision"))
-    expect(prompt).toContain(normalise("Route textual artifacts — accessibility snapshots, console excerpts, network summaries, and text trace excerpts — to antigravity_delegate"))
-    expect(prompt).toContain(normalise("spot layout breaks, missing text, overflow, dark-mode mismatches"))
-    expect(prompt).toContain(normalise("Do not delegate individual clicks or interactions to Gemini"))
-    expect(prompt).toContain(normalise("do not run autonomous destructive flows"))
-    expect(prompt).toContain(normalise("do not claim Gemini controls Playwright"))
-    expect(prompt).toContain(normalise("can reduce expensive primary-model context and uses bundled quota"))
-    expect(prompt).toContain(normalise("Binary Playwright traces cannot be passed directly to either tool"))
+    expect(limitation).toContain(normalise("Browser Control and Antigravity routing is prompt policy"))
+    expect(limitation).toContain(normalise("neither installs Browser Control nor Antigravity"))
+    expect(normalise(flow.limitations.join(" "))).toContain(normalise("Antigravity visual findings are advisory and can lose interaction context"))
   })
 
   test("custom flow routing rules include the same browser/artifact entries", () => {
@@ -74,10 +60,9 @@ describe("browser artifact routing", () => {
     const flow = buildFlowFromConfig(minimal)
     const rules = flow.routingRules.map((r: string) => normalise(r))
 
-    expect(rules).toContain(normalise("Route images, screenshots, PDFs, diagrams, and large-context reads to antigravity_vision or antigravity_delegate via Gemini 3.6 Flash when Antigravity is available."))
-    expect(rules.some((r) => r.includes(normalise("split visual outputs (screenshots, rendered PDFs) to antigravity_vision")))).toBe(true)
-    expect(rules.some((r) => r.includes(normalise("textual artifacts (accessibility snapshots, console excerpts, network summaries, text trace excerpts) to antigravity_delegate")))).toBe(true)
-    expect(rules.some((r) => r.includes(normalise("Extract bounded screenshots or text from binary Playwright traces before routing")))).toBe(true)
+    expect(rules.some((r) => r.includes(normalise("Use Browser Control MCP as the default browser transport")))).toBe(true)
+    expect(rules.some((r) => r.includes(normalise("one bounded snapshot, focused structured assertions, same-page diffs only")))).toBe(true)
+    expect(rules.some((r) => r.includes(normalise("keep browser control and finding disposition on the primary orchestrator")))).toBe(true)
   })
 
   test("custom flow limitations include the browser routing disclaimer", () => {
@@ -91,8 +76,9 @@ describe("browser artifact routing", () => {
     const flow = buildFlowFromConfig(minimal)
     const limitation = normalise(flow.limitations.find((l: string) => l.includes("Browser")) ?? "")
 
-    expect(limitation).toContain(normalise("Browser/frontend artifact routing through Antigravity is a prompt policy"))
-    expect(limitation).toContain(normalise("does not provide a Playwright MCP integration or intercept browser tool calls"))
+    expect(limitation).toContain(normalise("Browser Control and Antigravity routing is prompt policy"))
+    expect(limitation).toContain(normalise("neither installs Browser Control nor Antigravity"))
+    expect(normalise(flow.limitations.join(" "))).toContain(normalise("Antigravity visual findings are advisory and can lose interaction context"))
   })
 
   test("Gemini Flash weakness is stated in both prompts", () => {

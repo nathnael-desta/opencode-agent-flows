@@ -74,8 +74,9 @@ sequenceDiagram
 - Send high-risk work to routine first with explicit stop conditions; use deep only for evidence-backed residue after routine fails or blocks.
 - Use reviewer selectively for missing or failed verification, high-risk changes, and configured samples.
 - When a workflow explicitly requests code review, prefer reviewer and keep the reviewer in a different model family from the implementation worker where possible.
-- Route images, screenshots, PDFs, diagrams, and large-context reads to antigravity_vision or antigravity_delegate via Gemini 3.6 Flash when Antigravity is available.
-- After collecting Playwright/browser artifacts, split visual outputs (screenshots, rendered PDFs) to antigravity_vision and textual artifacts (accessibility snapshots, console excerpts, network summaries, text trace excerpts) to antigravity_delegate for analysis rather than reciting them with expensive primary-model tokens. Extract bounded screenshots or text from binary Playwright traces before routing.
+- Use Browser Control MCP as the default browser transport when available; keep one named or adopted session under the root orchestrator and do not silently fall back to an isolated browser when personal state is required.
+- Keep browser observations compact: one bounded snapshot, focused structured assertions, same-page diffs only, and selected visual checkpoints rather than repeated full snapshots or screenshots.
+- Route selected screenshots, rendered PDFs, diagrams, and large-context reads to antigravity_vision or antigravity_delegate via Gemini 3.6 Flash when Antigravity is available; keep browser control and finding disposition on the primary orchestrator.
 
 ### Escalation
 
@@ -111,4 +112,5 @@ Every root user turn becomes a run. Reports include actual model/provider usage,
 - Task-to-child-session linking is correlated when OpenCode does not expose an explicit relationship.
 - Model review is evidence, not ground truth.
 - Cross-family review selection is prompt-enforced; user agent overrides can make an independent model unavailable.
-- Browser/frontend artifact routing through Antigravity is a prompt policy within the orchestrator; it does not provide a Playwright MCP integration or intercept browser tool calls.
+- Browser Control and Antigravity routing is prompt policy: this plugin neither installs Browser Control nor Antigravity, intercepts their tools, nor guarantees that either is available.
+- Antigravity visual findings are advisory and can lose interaction context; the root orchestrator must provide a compact intent/state packet and verify actionable claims against the live DOM.

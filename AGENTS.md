@@ -62,6 +62,11 @@ bun run setup    # interactive terminal setup for the orchestration config
   maximum, at most five evidence-backed findings.
 - **Malformed worker or reviewer output is an explicit failure.** Never spawn an
   extra model call just to repair formatting.
+- **Behavior changes are documented before completion.** A feature or fix that
+  changes user-visible behavior, capabilities, configuration, routing, or an
+  architectural decision is incomplete until the relevant user-facing,
+  architecture, and generated docs are updated. Do not manufacture docs churn
+  for trivial internal changes with no observable effect.
 - **Telemetry stays backward compatible.** Persisted reports are versioned; keep
   `calls` as an alias for `assistantMessages` unless you design a migration.
 - **Never hardcode a model** in new orchestration code. Models come from the
