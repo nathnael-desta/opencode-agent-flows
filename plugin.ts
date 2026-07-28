@@ -1057,6 +1057,10 @@ export default async function agentFlowsPlugin(input: any, options: PluginOption
       if (toolInput.tool === "task") {
         const delegated = String(output.args.subagent_type ?? output.args.agent ?? "unknown")
         const description = typeof output.args.description === "string" ? output.args.description : ""
+        const prompt = typeof output.args.prompt === "string" ? output.args.prompt : ""
+        const packet = prompt || description
+        const packetFieldName = prompt ? "prompt" : "description"
+        const setPacket = (value: string) => { output.args[packetFieldName] = value }
         const delegatedRole = metadata[delegated]?.role
         const runTasks = [...tasks.values()].filter((task) => task.runID === run?.id)
         let execClass: ExecutionClass | undefined
@@ -1064,10 +1068,10 @@ export default async function agentFlowsPlugin(input: any, options: PluginOption
         if (run && runTasks.length >= orchestrationPolicy.maxTasksPerRun)
           throw new Error(`run reached the ${orchestrationPolicy.maxTasksPerRun}-task delegation budget; return a partial result or ask the user`)
         if (agent === flow.defaultAgent && (delegatedRole === "worker" || delegatedRole === "bulk-worker")) {
-          execClass = parseExecutionClass(description)
+          execClass = parseExecutionClass(packet)
           if (execClass === undefined)
             throw new Error(`worker task must declare an Execution Class: read-only, shared-write, or integration; add an "Execution Class" heading to the packet`)
-          expectedScope = parseExpectedScope(description)
+          expectedScope = parseExpectedScope(packet)
           if (!expectedScope || expectedScope.length === 0)
             throw new Error("worker task must supply a non-empty Expected Scope: a comma/semicolon-separated path or directory pattern manifest (e.g. src/**/*.ts, src/parser.ts)")
           const runningWorkerTasks = runTasks.filter((task) =>
@@ -1087,36 +1091,36 @@ export default async function agentFlowsPlugin(input: any, options: PluginOption
             if (runningWorkerTasks.length > 0)
               throw new Error("shared-write and integration tasks must run one at a time; wait for the current worker to finish")
           }
-          if (delegatedRole === "worker" && description.length > MAX_WORK_PACKET_CHARS)
+          if (delegatedRole === "worker" && packet.length > MAX_WORK_PACKET_CHARS)
             throw new Error(`routine work packet exceeds the ${MAX_WORK_PACKET_CHARS}-character surface-level planning budget`)
-          if (!description.includes("## Worker Execution Contract")) output.args.description = `${description}${WORK_REPORT_CONTRACT}`
+          if (!packet.includes("## Worker Execution Contract")) setPacket(`${packet}${WORK_REPORT_CONTRACT}`)
         }
         if (agent === flow.defaultAgent && delegated === "deep") {
           const routineBlocked = runTasks.some((task) => task.agent === "routine" && ["failed", "blocked"].includes(task.status))
           if (!routineBlocked) throw new Error("deep requires a failed or blocked routine attempt in the current run")
-          if (!description.includes("## Worker Execution Contract")) output.args.description = `${description}${WORK_REPORT_CONTRACT}`
+          if (!packet.includes("## Worker Execution Contract")) setPacket(`${packet}${WORK_REPORT_CONTRACT}`)
         }
         if (agent === flow.defaultAgent && delegated === reviewerPolicy?.agent) {
           if (!reviewerPolicy.enabled) throw new Error("milestone review is disabled")
-          if (description.length > reviewerPolicy.maxPacketChars) throw new Error(`review packet exceeds the ${reviewerPolicy.maxPacketChars}-character limit`)
-          const missing = missingPacketHeadings(description, REVIEW_PACKET_HEADINGS)
+          if (packet.length > reviewerPolicy.maxPacketChars) throw new Error(`review packet exceeds the ${reviewerPolicy.maxPacketChars}-character limit`)
+          const missing = missingPacketHeadings(packet, REVIEW_PACKET_HEADINGS)
           if (missing.length > 0) throw new Error(`review packet is missing headings: ${missing.join(", ")}`)
           const priorReviews = runTasks.filter((task) => task.agent === reviewerPolicy.agent)
           if (priorReviews.length >= reviewerPolicy.maxRounds) throw new Error(`review reached the ${reviewerPolicy.maxRounds}-round limit; triage remaining findings and stop`)
           if (priorReviews.length > 0) {
             const previous = priorReviews.at(-1)
             if (previous?.reviewReport?.verdict !== "changes-requested") throw new Error("re-review requires a prior changes-requested verdict")
-            const followupMissing = missingPacketHeadings(description, ["Finding Disposition", "Non-trivial Fixes"])
+            const followupMissing = missingPacketHeadings(packet, ["Finding Disposition", "Non-trivial Fixes"])
             if (followupMissing.length > 0) throw new Error(`second review requires headings: ${followupMissing.join(", ")}`)
           }
-          if (!description.includes("## Review Execution Contract"))
-            output.args.description = `${description}${REVIEW_REPORT_CONTRACT
+          if (!packet.includes("## Review Execution Contract"))
+            setPacket(`${packet}${REVIEW_REPORT_CONTRACT
               .replace("{CURRENT_ROUND}", String(priorReviews.length + 1))
               .replace("{MAX_ROUNDS}", String(reviewerPolicy.maxRounds))
-              .replace("{MAX_FINDINGS}", String(reviewerPolicy.maxFindings))}`
+              .replace("{MAX_FINDINGS}", String(reviewerPolicy.maxFindings))}`)
         }
-        const packetDescription = typeof output.args.description === "string" ? output.args.description : description
-        const taskID = stableTaskID(description)
+        const packetDescription = typeof output.args[packetFieldName] === "string" ? output.args[packetFieldName] as string : packet
+        const taskID = stableTaskID(packet)
         if (runTasks.some((task) => task.status === "running" && task.agent === delegated && task.taskID === taskID))
           throw new Error(`task ${taskID} is already running; do not launch duplicate concurrent attempts`)
         if (run && (delegatedRole === "worker" || delegatedRole === "bulk-worker")) {
@@ -1137,7 +1141,7 @@ export default async function agentFlowsPlugin(input: any, options: PluginOption
               if (prior.workReport?.blocker) contextParts.push(`blocker: ${prior.workReport.blocker}`)
               if (prior.workReportError) contextParts.push(`report-error: ${prior.workReportError}`)
               if (contextParts.length > 0) {
-                output.args.description = `${output.args.description}\n\n## Retry Context\nAttempt ${attempt + 1} of ${maximum} for Task ID ${taskID}. Prior attempt: ${contextParts.join("; ")}.`
+                setPacket(`${output.args[packetFieldName]}\n\n## Retry Context\nAttempt ${attempt + 1} of ${maximum} for Task ID ${taskID}. Prior attempt: ${contextParts.join("; ")}.`)
               }
             }
           }
