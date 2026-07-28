@@ -529,6 +529,36 @@ describe("agent flows plugin", () => {
     ).rejects.toThrow("Execution Class")
   })
 
+  test("validates and augments the full prompt when task description is a short label", async () => {
+    const hooks: any = await plugin({ client: client() })
+    await hooks["chat.message"]?.({ sessionID: "root", agent: "orchestrator", messageID: "run" }, { message: { id: "run", role: "user", time: { created: Date.now() } } })
+    const args: Record<string, unknown> = {
+      subagent_type: "routine",
+      description: "Move renewal settings",
+      prompt: workPacket,
+    }
+
+    await hooks["tool.execute.before"]?.(
+      { tool: "task", sessionID: "root", callID: "prompt-packet" },
+      { args },
+    )
+
+    expect(args.description).toBe("Move renewal settings")
+    expect(args.prompt).toContain("## Worker Execution Contract")
+  })
+
+  test("rejects missing packet headings in prompt rather than accepting the short description", async () => {
+    const hooks: any = await plugin({ client: client() })
+    await hooks["chat.message"]?.({ sessionID: "root", agent: "orchestrator", messageID: "run" }, { message: { id: "run", role: "user", time: { created: Date.now() } } })
+
+    await expect(
+      hooks["tool.execute.before"]?.(
+        { tool: "task", sessionID: "root", callID: "bad-prompt-packet" },
+        { args: { subagent_type: "routine", description: "Move renewal settings", prompt: "Move it." } },
+      ),
+    ).rejects.toThrow("Execution Class")
+  })
+
   test("admits read-only tasks up to the concurrency cap", async () => {
     const hooks: any = await plugin(
       { client: client() },

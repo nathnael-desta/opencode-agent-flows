@@ -1088,7 +1088,8 @@ export default async function agentFlowsPlugin(input: any, options: PluginOption
         const description = typeof output.args.description === "string" ? output.args.description : ""
         const prompt = typeof output.args.prompt === "string" ? output.args.prompt : ""
         const packet = prompt || description
-        const packetField = prompt ? "prompt" : "description"
+        const packetFieldName = prompt ? "prompt" : "description"
+        const setPacket = (value: string) => { output.args[packetFieldName] = value }
         const delegatedRole = metadata[delegated]?.role
         const runTasks = [...tasks.values()].filter((task) => task.runID === run?.id)
         let execClass: ExecutionClass | undefined
@@ -1121,12 +1122,12 @@ export default async function agentFlowsPlugin(input: any, options: PluginOption
           }
           if (delegatedRole === "worker" && packet.length > MAX_WORK_PACKET_CHARS)
             throw new Error(`routine work packet exceeds the ${MAX_WORK_PACKET_CHARS}-character surface-level planning budget`)
-          if (!packet.includes("## Worker Execution Contract")) output.args[packetField] = `${packet}${WORK_REPORT_CONTRACT}`
+          if (!packet.includes("## Worker Execution Contract")) setPacket(`${packet}${WORK_REPORT_CONTRACT}`)
         }
         if (agent === flow.defaultAgent && delegated === "deep") {
           const routineBlocked = runTasks.some((task) => task.agent === "routine" && ["failed", "blocked"].includes(task.status))
           if (!routineBlocked) throw new Error("deep requires a failed or blocked routine attempt in the current run")
-          if (!packet.includes("## Worker Execution Contract")) output.args[packetField] = `${packet}${WORK_REPORT_CONTRACT}`
+          if (!packet.includes("## Worker Execution Contract")) setPacket(`${packet}${WORK_REPORT_CONTRACT}`)
         }
         if (agent === flow.defaultAgent && delegated === reviewerPolicy?.agent) {
           if (!reviewerPolicy.enabled) throw new Error("milestone review is disabled")
@@ -1142,12 +1143,12 @@ export default async function agentFlowsPlugin(input: any, options: PluginOption
             if (followupMissing.length > 0) throw new Error(`second review requires headings: ${followupMissing.join(", ")}`)
           }
           if (!packet.includes("## Review Execution Contract"))
-            output.args[packetField] = `${packet}${REVIEW_REPORT_CONTRACT
+            setPacket(`${packet}${REVIEW_REPORT_CONTRACT
               .replace("{CURRENT_ROUND}", String(priorReviews.length + 1))
               .replace("{MAX_ROUNDS}", String(reviewerPolicy.maxRounds))
-              .replace("{MAX_FINDINGS}", String(reviewerPolicy.maxFindings))}`
+              .replace("{MAX_FINDINGS}", String(reviewerPolicy.maxFindings))}`)
         }
-        const packetDescription = typeof output.args[packetField] === "string" ? output.args[packetField] : packet
+        const packetDescription = typeof output.args[packetFieldName] === "string" ? output.args[packetFieldName] as string : packet
         const taskID = stableTaskID(packet)
         if (runTasks.some((task) => task.status === "running" && task.agent === delegated && task.taskID === taskID))
           throw new Error(`task ${taskID} is already running; do not launch duplicate concurrent attempts`)
@@ -1169,7 +1170,7 @@ export default async function agentFlowsPlugin(input: any, options: PluginOption
               if (prior.workReport?.blocker) contextParts.push(`blocker: ${prior.workReport.blocker}`)
               if (prior.workReportError) contextParts.push(`report-error: ${prior.workReportError}`)
               if (contextParts.length > 0) {
-                output.args.description = `${output.args.description}\n\n## Retry Context\nAttempt ${attempt + 1} of ${maximum} for Task ID ${taskID}. Prior attempt: ${contextParts.join("; ")}.`
+                setPacket(`${output.args[packetFieldName]}\n\n## Retry Context\nAttempt ${attempt + 1} of ${maximum} for Task ID ${taskID}. Prior attempt: ${contextParts.join("; ")}.`)
               }
             }
           }
