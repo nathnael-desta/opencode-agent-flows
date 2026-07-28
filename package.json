@@ -12,6 +12,8 @@
     "src/**/*.ts",
     "scripts/",
     "docs/",
+    "!docs/research/Technical Architecture and Engineering Report_ Optimizing opencode-agent-flows.txt",
+    "!docs/research/orchestration-architecture-decisions.md",
     "examples/",
     "AGENTS.md"
   ],

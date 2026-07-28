@@ -12,7 +12,7 @@ help:
 >printf '%s\n' \
   'make check                 Run documentation, tests, type checks, and package validation.' \
   'make package               Preview the files that npm would publish.' \
-  'make publish               Publish the current version using npm authentication.' \
+  'make publish               Validate, then publish the current version using npm authentication.' \
   'make release VERSION=patch Release committed work to npm and GitHub.'
 
 check:
@@ -22,7 +22,7 @@ check:
 package:
 >npm pack --dry-run
 
-publish:
+publish: check
 >npm publish --access public
 
 release:

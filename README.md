@@ -162,6 +162,8 @@ and every Deep call requires explicit one-use user approval.
 ## Release
 
 `make check` runs the complete validation suite and previews the npm package.
+`make publish` always runs that check first, then publishes the current version
+using npm authentication.
 After committing the intended work on `main`, run `make release VERSION=patch`.
 It verifies a clean, up-to-date branch, bumps the version, validates again,
 commits the version bump, tags it, pushes the source and tag, then publishes to
