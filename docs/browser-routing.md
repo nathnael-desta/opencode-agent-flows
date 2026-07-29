@@ -157,7 +157,9 @@ DOM verification turns those suggestions into evidence before code is changed.
 ## Operating policy lives in skills
 
 The detailed operating policy is **installed separately as skills**, not carried
-in the orchestrator prompt. The prompt keeps only a pointer plus the routing
+in the orchestrator prompt. The `skills` CLI comes from npm and pulls the skills
+from the [nathnael-desta/skills](https://github.com/nathnael-desta/skills)
+repository. The prompt keeps only a pointer plus the routing
 invariants that must hold before a skill loads, so the detail costs nothing
 until it is actually needed:
 
