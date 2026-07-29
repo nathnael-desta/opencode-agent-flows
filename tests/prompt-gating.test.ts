@@ -101,4 +101,19 @@ describe("setup tells the user how to get the skills", () => {
     expect(SETUP_COMMAND_TEMPLATE).toContain("browser-control-operations")
     expect(SETUP_COMMAND_TEMPLATE).toContain("antigravity-delegation")
   })
+
+  test("the interview presents the whole ecosystem, not just this plugin", async () => {
+    // A new user should see every add-on and its exact command in one place,
+    // rather than discovering them one repository at a time.
+    const { SETUP_COMMAND_TEMPLATE } = await import("../src/orchestration/setup-prompt.js")
+    for (const pointer of [
+      "antigravity.google/cli/install.sh",
+      "opencode-antigravity-delegate",
+      "opencode-commandcode-provider",
+      "COMMANDCODE_API_KEY",
+      "setup-github-beads",
+    ]) {
+      expect({ pointer, present: SETUP_COMMAND_TEMPLATE.includes(pointer) }).toEqual({ pointer, present: true })
+    }
+  })
 })

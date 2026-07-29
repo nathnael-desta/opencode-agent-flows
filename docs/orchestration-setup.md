@@ -47,6 +47,25 @@ Check it any time with `/flow-config`.
 5. **Confirms before saving.** Nothing is persisted until you approve, then it
    writes the config via `flow_configure`.
 
+## The setup menu
+
+Step 7 of the interview lays out every optional add-on in one place, with the
+reason and the exact command, and states which ones you already have:
+
+| Add-on | Why | How |
+|---|---|---|
+| Operating-policy skills | Browser and Gemini policy, loaded on demand so it costs nothing until used | `npx skills@latest add nathnael-desta/skills --skill browser-control-operations --skill antigravity-delegation --agent opencode --global -y` |
+| Antigravity (Gemini) | Vision and large-context reads on a Google AI Pro subscription | Install the `agy` CLI, run it once to log in, add the `opencode-antigravity-delegate` plugin |
+| Command Code | Low-cost open-source worker models | Add the `opencode-commandcode-provider` plugin, set `COMMANDCODE_API_KEY` |
+| GitHub Issues + Beads | Repository workflow setup | `npx skills@latest add nathnael-desta/skills --skill setup-github-beads --agent opencode --global -y` |
+
+None of these change your role bindings — they are complementary helpers.
+
+A full new-user install of all of the above is verified end to end by
+[`fresh-env`](https://github.com/nathnael-desta/fresh-env)
+(`scenarios/full-journey.json`), which stands the whole thing up in a disposable
+environment in about 52 seconds.
+
 ## Roles you can set
 
 Only `orchestrator` and `routine` are required. Anything you omit inherits:
