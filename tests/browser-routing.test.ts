@@ -8,7 +8,11 @@ function normalise(text: string): string {
 }
 
 describe("browser artifact routing", () => {
-  test("built-in and custom prompts contain the Browser Control and visual-offload invariants", () => {
+  // Detailed operating policy moved to the browser-control-operations and
+  // antigravity-delegation skills, which load on demand instead of costing
+  // context on every turn. The prompt keeps the pointer and the routing
+  // invariants that must hold before any skill is loaded.
+  test("built-in and custom prompts point at the operating-policy skills", () => {
     const flow = flows["openai-commandcode-router"]
     const prompts = [
       normalise(flow.agents.orchestrator.prompt ?? ""),
@@ -16,18 +20,8 @@ describe("browser artifact routing", () => {
     ]
 
     for (const prompt of prompts) {
-      expect(prompt).toContain(normalise("use them for all browser interaction"))
-      expect(prompt).toContain(normalise("Load the Browser Control skill as operating policy and use MCP as the execution transport"))
-      expect(prompt).toContain(normalise("one named or adopted session"))
-      expect(prompt).toContain(normalise("one bounded snapshot of the relevant region"))
-      expect(prompt).toContain(normalise("Use snapshot diff only for compatible same-page changes, never across navigation or reload"))
-      expect(prompt).toContain(normalise("visual checkpoints only for the initial bug"))
-      expect(prompt).toContain(normalise("maximum of three evidence-backed findings"))
-      expect(prompt).toContain(normalise("never let it click, type, authenticate, approve, or control Browser Control"))
-      expect(prompt).toContain(normalise("verify actionable findings through DOM, ARIA, computed styles, or bounding boxes"))
-      expect(prompt).toContain(normalise("Browser Control handoff for CAPTCHA, 2FA, passkeys, payment confirmation"))
-      expect(prompt).toContain(normalise("ask the user to attach or reconnect instead of silently switching to an isolated browser"))
-      expect(prompt).toContain(normalise("If Antigravity is unavailable, continue semantic and DOM verification"))
+      expect(prompt).toContain(normalise("load the browser-control-operations skill"))
+      expect(prompt).toContain(normalise("load the antigravity-delegation skill"))
     }
   })
 
@@ -86,17 +80,8 @@ describe("browser artifact routing", () => {
     const custom = normalise(composeOrchestratorPrompt({ antigravity: true, browser: true }))
 
     for (const prompt of [builtin, custom]) {
-      expect(prompt).toContain(normalise("long-horizon autonomy"))
-      expect(prompt).toContain(normalise("agentic loop, escalation, and milestone review on your primary models"))
-    }
-  })
-
-  test("Gemini 3.1 Pro downgrade is forbidden in both prompts", () => {
-    const builtin = normalise(flows["openai-commandcode-router"].agents.orchestrator.prompt ?? "")
-    const custom = normalise(composeOrchestratorPrompt({ antigravity: true, browser: true }))
-
-    for (const prompt of [builtin, custom]) {
-      expect(prompt).toContain(normalise("do not substitute Gemini 3.1 Pro"))
+      expect(prompt).toContain(normalise("weak at long-horizon autonomy"))
+      expect(prompt).toContain(normalise("escalation, or milestone review on your primary models"))
     }
   })
 
@@ -105,7 +90,7 @@ describe("browser artifact routing", () => {
     const custom = normalise(composeOrchestratorPrompt({ antigravity: true, browser: true }))
 
     for (const prompt of [builtin, custom]) {
-      expect(prompt).toContain(normalise("do not route Claude or other non-Google models through it"))
+      expect(prompt).toContain(normalise("Route only Google Gemini models through Antigravity"))
     }
   })
 })

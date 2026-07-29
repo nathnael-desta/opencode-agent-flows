@@ -154,6 +154,29 @@ DOM verification turns those suggestions into evidence before code is changed.
 - Gemini Flash is a one-shot perception helper, not a long-horizon browser
   agent, implementation worker, escalation agent, or review gate.
 
+## Operating policy lives in skills
+
+The detailed operating policy is **installed separately as skills**, not carried
+in the orchestrator prompt. The prompt keeps only a pointer plus the routing
+invariants that must hold before a skill loads, so the detail costs nothing
+until it is actually needed:
+
+```bash
+npx skills@latest add nathnael-desta/skills \
+  --skill browser-control-operations --skill antigravity-delegation \
+  --agent opencode --global -y
+```
+
+- `browser-control-operations` — filtered JSON output, `page.evaluate` for
+  document work, real Playwright locators, bounded snapshots, visual
+  checkpoints, human handoff.
+- `antigravity-delegation` — what Gemini substitutes for, what is prohibited,
+  quota reality, Gemini-only model selection.
+
+Moving these out cut the orchestrator prompt from ~10,700 to ~7,300 characters
+(~2,800 to ~1,900 tokens) on every turn, and prompt gating removes the pointers
+too when the tools are not installed.
+
 ## Measured against playwright-cli
 
 Same operations, measured directly:

@@ -56,7 +56,7 @@ describe("optional-tool guidance is gated on the tools existing", () => {
   test("gating measurably shrinks the per-turn prompt", async () => {
     const full = await promptFor({ plugin: ["opencode-antigravity-delegate"], mcp: { "browser-control": {} } })
     const lean = await promptFor({ plugin: [], mcp: {} })
-    expect(full.length - lean.length).toBeGreaterThan(3_000)
+    expect(full.length - lean.length).toBeGreaterThan(600)
   })
 })
 
@@ -78,7 +78,7 @@ describe("gating constants stay in sync with the built-in flow", () => {
   })
 })
 
-describe("measured browser transport guidance", () => {
+describe("prompts route to the operating-policy skills", () => {
   test("both prompts carry the cost and correctness rules that were measured", async () => {
     const { composeOrchestratorPrompt } = await import("../src/orchestration/roles.js")
     const prompts = [
@@ -86,13 +86,19 @@ describe("measured browser transport guidance", () => {
       composeOrchestratorPrompt({ antigravity: true, browser: true }),
     ]
     for (const prompt of prompts) {
-      // ~10x cheaper, but only with filtered JSON: plain output floods on console events.
-      expect(prompt).toMatch(/JSON output and filter/i)
-      // The gotcha that already caused a wrong call once.
-      expect(prompt).toContain("page.evaluate")
-      // Assert, don't sleep-poll — this is what caught "editor never mounted".
-      expect(prompt).toContain("waitForSelector")
-      expect(prompt).toMatch(/playwright-cli/)
+      // The measured operating detail lives in the skills now; the prompt must
+      // still route to them, or the policy never loads at all.
+      expect(prompt).toContain("browser-control-operations")
+      expect(prompt).toContain("antigravity-delegation")
     }
+  })
+})
+
+describe("setup tells the user how to get the skills", () => {
+  test("the interview names the npm install command and both skills", async () => {
+    const { SETUP_COMMAND_TEMPLATE } = await import("../src/orchestration/setup-prompt.js")
+    expect(SETUP_COMMAND_TEMPLATE).toContain("skills@latest add nathnael-desta/skills")
+    expect(SETUP_COMMAND_TEMPLATE).toContain("browser-control-operations")
+    expect(SETUP_COMMAND_TEMPLATE).toContain("antigravity-delegation")
   })
 })
