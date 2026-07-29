@@ -12,7 +12,7 @@ import {
   type OrchestrationConfig,
   type OrchestrationRole,
 } from "./src/orchestration/config.js"
-import { buildFlowFromConfig } from "./src/orchestration/roles.js"
+import { ANTIGRAVITY_GUIDANCE, BROWSER_GUIDANCE, buildFlowFromConfig } from "./src/orchestration/roles.js"
 import { discoverCatalog } from "./src/orchestration/catalog.js"
 import { normalizeProviders } from "./src/orchestration/discovery.js"
 import { formatDiscovery, formatOrchestrationConfig } from "./src/orchestration/present.js"
@@ -498,6 +498,32 @@ async function resolveFlow(
   return { flow }
 }
 
+
+/**
+ * The orchestrator prompt is resent as system context on every turn, so any
+ * text in it is paid for continuously. Guidance for optional third-party tools
+ * (Antigravity, Browser Control) was ~27% of it and described tools that may
+ * not be installed at all. Drop those blocks when their tools are absent.
+ *
+ * Removal is by exact match against the shared constants, never fuzzy matching,
+ * so a prompt that does not contain them is returned untouched.
+ */
+function detectCapabilities(config: OpenCodeConfig): { antigravity: boolean; browser: boolean } {
+  const plugins = (config.plugin ?? []).map((entry) => (typeof entry === "string" ? entry : entry?.[0] ?? "")).join(" ")
+  const mcpKeys = Object.keys(config.mcp ?? {}).join(" ")
+  return {
+    antigravity: /antigravity-delegate/i.test(plugins),
+    browser: /browser[-_]?control/i.test(`${plugins} ${mcpKeys}`),
+  }
+}
+
+function gateOptionalGuidance(prompt: string, capabilities: { antigravity: boolean; browser: boolean }): string {
+  let gated = prompt
+  if (!capabilities.antigravity) gated = gated.replace(ANTIGRAVITY_GUIDANCE, "")
+  if (!capabilities.browser) gated = gated.replace(BROWSER_GUIDANCE, "")
+  return gated.replace(/\s{2,}/g, " ").trim()
+}
+
 export default async function agentFlowsPlugin(input: any, options: PluginOptions = {}) {
   const telemetryOptions = options.telemetry ?? {}
   const reportDirectory = expandPath(telemetryOptions.reportDir ?? options.usageReportDir ?? defaultTelemetryDirectory())
@@ -667,7 +693,12 @@ export default async function agentFlowsPlugin(input: any, options: PluginOption
           },
         })
     } catch (error) {
-      console.warn("Failed to finalize agent flow telemetry", error)
+      // Put the run back so a later idle event can retry. The entry is removed
+      // up front to prevent concurrent double-finalization, but leaving it
+      // removed after a transient failure (an IPC hiccup, a full disk) would
+      // discard that run's telemetry permanently.
+      activeRuns.set(rootSessionID, run)
+      console.warn("Failed to finalize agent flow telemetry; will retry on the next idle", error)
     }
   }
 
@@ -1019,6 +1050,16 @@ export default async function agentFlowsPlugin(input: any, options: PluginOption
         console.warn(
           `opencode-agent-flows: ${shadowedAgents.join(", ")} were already defined elsewhere and keep that definition. If you did not define them yourself, this plugin is probably loaded twice (for example globally and per project); remove one copy.`,
         )
+      // Trim guidance for optional tools that are not installed, so the user
+      // does not pay for it on every turn.
+      const capabilities = detectCapabilities(config)
+      const orchestrator = config.agent[flow.defaultAgent] as AgentDefinition | undefined
+      // Replace rather than mutate: config.agent[name] holds a reference to the
+      // module-level flow definition, so mutating it would corrupt the shared
+      // object for every later plugin instance in the same process.
+      if (orchestrator?.prompt)
+        config.agent[flow.defaultAgent] = { ...orchestrator, prompt: gateOptionalGuidance(orchestrator.prompt, capabilities) }
+
       if (options.setDefault !== false) config.default_agent ??= flow.defaultAgent
       config.command ??= {}
       config.command["flow-setup"] ??= {

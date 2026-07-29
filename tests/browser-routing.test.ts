@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { flows } from "../src/flows/index.js"
-import { buildFlowFromConfig, ROLE_TEMPLATES } from "../src/orchestration/roles.js"
+import { buildFlowFromConfig, composeOrchestratorPrompt, ROLE_TEMPLATES } from "../src/orchestration/roles.js"
 import type { OrchestrationConfig } from "../src/orchestration/config.js"
 
 function normalise(text: string): string {
@@ -12,7 +12,7 @@ describe("browser artifact routing", () => {
     const flow = flows["openai-commandcode-router"]
     const prompts = [
       normalise(flow.agents.orchestrator.prompt ?? ""),
-      normalise(ROLE_TEMPLATES.orchestrator.prompt ?? ""),
+      normalise(composeOrchestratorPrompt({ antigravity: true, browser: true })),
     ]
 
     for (const prompt of prompts) {
@@ -83,7 +83,7 @@ describe("browser artifact routing", () => {
 
   test("Gemini Flash weakness is stated in both prompts", () => {
     const builtin = normalise(flows["openai-commandcode-router"].agents.orchestrator.prompt ?? "")
-    const custom = normalise(ROLE_TEMPLATES.orchestrator.prompt ?? "")
+    const custom = normalise(composeOrchestratorPrompt({ antigravity: true, browser: true }))
 
     for (const prompt of [builtin, custom]) {
       expect(prompt).toContain(normalise("long-horizon autonomy"))
@@ -93,7 +93,7 @@ describe("browser artifact routing", () => {
 
   test("Gemini 3.1 Pro downgrade is forbidden in both prompts", () => {
     const builtin = normalise(flows["openai-commandcode-router"].agents.orchestrator.prompt ?? "")
-    const custom = normalise(ROLE_TEMPLATES.orchestrator.prompt ?? "")
+    const custom = normalise(composeOrchestratorPrompt({ antigravity: true, browser: true }))
 
     for (const prompt of [builtin, custom]) {
       expect(prompt).toContain(normalise("do not substitute Gemini 3.1 Pro"))
@@ -102,7 +102,7 @@ describe("browser artifact routing", () => {
 
   test("non-Google model routing through Antigravity is forbidden in both prompts", () => {
     const builtin = normalise(flows["openai-commandcode-router"].agents.orchestrator.prompt ?? "")
-    const custom = normalise(ROLE_TEMPLATES.orchestrator.prompt ?? "")
+    const custom = normalise(composeOrchestratorPrompt({ antigravity: true, browser: true }))
 
     for (const prompt of [builtin, custom]) {
       expect(prompt).toContain(normalise("do not route Claude or other non-Google models through it"))

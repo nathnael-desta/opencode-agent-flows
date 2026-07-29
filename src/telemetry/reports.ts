@@ -215,7 +215,10 @@ export function buildFlowReport(input: BuildReportInput): FlowReport {
   totals.tasksStarted = tasks.length
   totals.tasksCompleted = tasks.filter((task) => task.status === "completed").length
   totals.taskInvalidOutputs = tasks.filter((task) => task.status === "invalid-output").length
-  totals.taskFailures = tasks.filter((task) => ["failed", "blocked", "invalid-output"].includes(task.status)).length
+  // invalid-output is counted separately in taskInvalidOutputs. Folding it in
+  // here too double-counts it and raises a warning toast for a worker that did
+  // the job but mis-formatted its report marker.
+  totals.taskFailures = tasks.filter((task) => ["failed", "blocked"].includes(task.status)).length
   totals.verificationRuns = verification.length
   totals.verificationFailures = verification.filter((item) => item.status === "failed").length
   totals.retries = Math.max(0, tasks.length - new Set(tasks.map((task) => (task.agent ?? "unknown") + ":" + (task.taskID ?? task.description ?? task.id))).size)

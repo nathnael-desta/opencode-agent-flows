@@ -39,7 +39,8 @@ findings, quota snapshots, costs, and estimated baseline displacement.
 `assistantMessages` is the accurate metric for model interactions. `calls`
 remains as a **compatibility alias** so older persisted reports keep working.
 
-Reports distinguish `invalid-output` from ordinary failures, so a formatting
+Reports distinguish `invalid-output` from ordinary failures — it is counted in
+`taskInvalidOutputs` only, never folded into `taskFailures` — so a formatting
 problem is never conflated with a substantive one.
 
 Session task history is rebuilt from persisted run reports, so restarting the

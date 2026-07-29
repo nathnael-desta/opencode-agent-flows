@@ -140,6 +140,18 @@ rounds is a hard ceiling. Style and findings already covered by deterministic
 checks are non-blocking. If review is unavailable, the orchestrator discloses
 that and performs one careful diff self-review.
 
+## Prompt Cost Control
+
+The orchestrator prompt is resent as system context on **every turn**, so text in
+it is paid for continuously. Guidance for optional third-party tools
+(Antigravity, Browser Control) is therefore **gated on those tools actually
+being installed**: the plugin inspects the merged `plugin` and `mcp` config and
+removes the blocks whose tools are absent.
+
+With neither installed this removes ~4,200 characters (~1,100 tokens) from every
+turn. With both installed the prompt is unchanged. Removal is by exact match
+against shared constants, never fuzzy matching.
+
 ## Orchestration Setup
 
 Instead of hardcoding models in a flow file, a user can generate a flow from the

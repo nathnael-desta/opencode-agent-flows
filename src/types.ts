@@ -65,6 +65,10 @@ export interface FlowDefinition {
 
 export interface OpenCodeConfig {
   default_agent?: string
+  /** Merged plugin list; used to detect which optional tools are installed. */
+  plugin?: Array<string | [string, Record<string, unknown>]>
+  /** Merged MCP server map; used to detect Browser Control. */
+  mcp?: Record<string, unknown>
   agent?: Record<string, AgentDefinition | Record<string, unknown>>
   command?: Record<string, { template: string; description?: string; agent?: string; model?: string; subtask?: boolean }>
 }
