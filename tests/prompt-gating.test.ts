@@ -59,3 +59,40 @@ describe("optional-tool guidance is gated on the tools existing", () => {
     expect(full.length - lean.length).toBeGreaterThan(3_000)
   })
 })
+
+describe("gating constants stay in sync with the built-in flow", () => {
+  test("both optional blocks appear verbatim in the built-in prompt", async () => {
+    // Gating removes these by exact match. If the built-in flow's copy drifts
+    // from the shared constant, removal silently stops working and the user
+    // keeps paying for guidance about tools they do not have.
+    const { ANTIGRAVITY_GUIDANCE, BROWSER_GUIDANCE } = await import("../src/orchestration/roles.js")
+    const builtin = flows["openai-commandcode-router"].agents.orchestrator.prompt ?? ""
+    expect(builtin.includes(ANTIGRAVITY_GUIDANCE)).toBe(true)
+    expect(builtin.includes(BROWSER_GUIDANCE)).toBe(true)
+  })
+
+  test("the built-in flow is gateable end to end", async () => {
+    const lean = await promptFor({ plugin: [], mcp: {} })
+    expect(lean).not.toContain("Browser Control MCP tools")
+    expect(lean).not.toContain("antigravity_vision")
+  })
+})
+
+describe("measured browser transport guidance", () => {
+  test("both prompts carry the cost and correctness rules that were measured", async () => {
+    const { composeOrchestratorPrompt } = await import("../src/orchestration/roles.js")
+    const prompts = [
+      flows["openai-commandcode-router"].agents.orchestrator.prompt ?? "",
+      composeOrchestratorPrompt({ antigravity: true, browser: true }),
+    ]
+    for (const prompt of prompts) {
+      // ~10x cheaper, but only with filtered JSON: plain output floods on console events.
+      expect(prompt).toMatch(/JSON output and filter/i)
+      // The gotcha that already caused a wrong call once.
+      expect(prompt).toContain("page.evaluate")
+      // Assert, don't sleep-poll — this is what caught "editor never mounted".
+      expect(prompt).toContain("waitForSelector")
+      expect(prompt).toMatch(/playwright-cli/)
+    }
+  })
+})

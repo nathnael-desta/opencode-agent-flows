@@ -153,3 +153,31 @@ DOM verification turns those suggestions into evidence before code is changed.
   authenticated access—not a security sandbox.
 - Gemini Flash is a one-shot perception helper, not a long-horizon browser
   agent, implementation worker, escalation agent, or review gate.
+
+## Measured against playwright-cli
+
+Same operations, measured directly:
+
+| Operation | playwright-cli | Browser Control | Browser Control + filtered JSON |
+|---|---|---|---|
+| Trivial eval | 124 B | 3 B | 3 B |
+| Navigate | 419 B | 642 B | **39 B** |
+
+Browser Control wins clearly — **but only with JSON output that you filter**.
+Plain output emits every console and network event, so one noisy page (a failing
+GSI script, a WebSocket retry loop) can flood a single call. playwright-cli
+additionally echoes the whole script back in a "Ran Playwright code" block on
+every run and writes snapshot files you then pay to read.
+
+Operationally Browser Control is also the better driver: real Playwright
+locators (`getByRole`, `fill`, `waitForSelector`) let the orchestrator assert
+instead of sleeping and re-polling — that is what caught an "editor never
+mounted" case immediately rather than passing silently. Sessions persist across
+calls, so an authenticated tab is not re-logged-in each time.
+
+Two gotchas the prompt now states explicitly:
+
+- Code executes **Node-side**. Anything touching the document must run inside
+  `page.evaluate`.
+- It can **adopt your real authenticated tab**, which is desirable for logged-in
+  work but means destructive actions need explicit confirmation.
