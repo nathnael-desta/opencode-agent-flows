@@ -29,6 +29,13 @@ bun run setup    # interactive terminal setup for the orchestration config
 
 `bun run verify` is the gate. Do not commit with it failing.
 
+To check what a brand-new user gets (a disposable OpenCode with none of your
+config), use the separate `fresh-env` tool:
+
+```bash
+bun ~/code/fresh-env/bin/fresh-env.ts ~/code/fresh-env/scenarios/agent-flows-local.json
+```
+
 ## Layout
 
 | Path | Responsibility |
